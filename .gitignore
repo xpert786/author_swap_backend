@@ -13,6 +13,12 @@ ENV/
 .venv/
 *.env
 
+
+# Poetry
+.cache/
+.venv/
+poetry.lock
+
 # Django
 *.log
 *.pot
