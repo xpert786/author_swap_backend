@@ -1,0 +1,58 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.sqlite3
+*.db
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv/
+*.env
+
+# Django
+*.log
+*.pot
+*.pyc
+db.sqlite3
+media/
+static/
+staticfiles/
+migrations/
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*.bak
+
+# OS Files
+.DS_Store
+Thumbs.db
+
+# Build and Packaging
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# PyTest / Coverage
+.coverage
+htmlcov/
+.tox/
+.pytest_cache/
+
+
+
+
+
+*/migrations/__pycache__/
+*/migrations/*.pyc
+*/migrations/*.pyo
+*/migrations/*.log
+# but keep the __init__.py files
+!*/migrations/__init__.py
