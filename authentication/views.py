@@ -321,7 +321,7 @@ class GenreChoicesAPIView(APIView):
         return Response({
             'primary_genres': [{'value': v, 'label': l} for v, l in PRIMARY_GENRE_CHOICES],
             'subgenres': subgenres_by_genre,
-            'audience_tags': [{'value': v, 'label': l} for v, l in AUDIENCE_TAGS_CHOICES],
+            'audience_tags': [{'value': v, 'label': l} for v, l in AUDIENCE_TAG_CHOICES],
             'rules': {
                 'primary_genre_required': True,
                 'subgenres_max': 3,
