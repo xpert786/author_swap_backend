@@ -1,6 +1,10 @@
 from django.urls import path
 from rest_framework_simplejwt.views import TokenRefreshView
-from .views import LoginAPIView, SignupAPIView, ForgotPasswordAPIView, ResetPasswordAPIView, AccountBasicsAPIView, OnlinePresenceAPIView, UserProfileReviewAPIView
+from .views import (
+    LoginAPIView, SignupAPIView, ForgotPasswordAPIView, ResetPasswordAPIView,
+    AccountBasicsAPIView, OnlinePresenceAPIView, UserProfileReviewAPIView,
+    SubgenresByGenreAPIView, GenreChoicesAPIView
+)
 
 urlpatterns = [
     path('login/', LoginAPIView.as_view(), name='login'),
@@ -11,4 +15,6 @@ urlpatterns = [
     path('onboarding/account-basics/', AccountBasicsAPIView.as_view(), name='account-basics'),
     path('onboarding/online-presence/', OnlinePresenceAPIView.as_view(), name='online-presence'),
     path('profile/review/', UserProfileReviewAPIView.as_view(), name='profile-review'),
+    path('subgenres-by-genre/', SubgenresByGenreAPIView.as_view(), name='subgenres-by-genre'),
+    path('genre-choices/', GenreChoicesAPIView.as_view(), name='genre-choices'),
 ]
