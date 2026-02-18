@@ -117,11 +117,11 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
-STATIC_URL = 'static/'
+STATIC_URL = '/authorswap/static/'
 
 # Media files
-MEDIA_URL = 'media/'
-MEDIA_ROOT = BASE_DIR / 'media'
+MEDIA_URL = '/authorswap/media/'
+MEDIA_ROOT = BASE_DIR / 'authorswap/media'
 
 # Django REST Framework settings
 REST_FRAMEWORK = {
