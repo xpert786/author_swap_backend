@@ -2,7 +2,7 @@ from rest_framework import serializers
 from django.contrib.auth import authenticate
 from django.contrib.auth import get_user_model
 from django.utils.translation import gettext_lazy as _
-from .models import PasswordResetToken, UserProfile, PRIMARY_GENRE_CHOICES, ALL_SUBGENRES, AUDIENCE_TAG_CHOICES, GENRE_SUBGENRE_MAPPING
+from .models import PasswordResetToken, UserProfile, PRIMARY_GENRE_CHOICES, ALL_SUBGENRES, AUDIENCE_TAG_CHOICES, GENRE_SUBGENRE_MAPPING, COLLABORATION_STATUS
 import json
 
 User = get_user_model()
@@ -395,22 +395,11 @@ class AccountBasicsSerializer(serializers.ModelSerializer):
 
 class OnlinePresenceSerializer(serializers.ModelSerializer):
     website_url = serializers.URLField(required=True)
-    facebook_url = serializers.URLField(required=True)
-    instagram_url = serializers.URLField(required=True)
-    tiktok_url = serializers.URLField(required=True)
-    Collaboration_Status = serializers.CharField(required=True, allow_blank=False)
+    collaboration_status = serializers.ChoiceField(choices=COLLABORATION_STATUS, required=True)
 
     class Meta:
         model = UserProfile
-        fields = ['website_url', 'facebook_url', 'instagram_url', 'tiktok_url', 'Collaboration_Status']
-
-    def validate_Collaboration_Status(self, value):
-        valid_choices = ['Open to swaps', 'Invite only']
-        if value not in valid_choices:
-            raise serializers.ValidationError(
-                f"Invalid choice. Must be one of: {', '.join(valid_choices)}"
-            )
-        return value
+        fields = ['website_url', 'facebook_url', 'instagram_url', 'tiktok_url', 'collaboration_status']
 
 
 class UserProfileReviewSerializer(serializers.ModelSerializer):
@@ -427,7 +416,7 @@ class UserProfileReviewSerializer(serializers.ModelSerializer):
             'user_email', 'user_username', 'pen_name', 'author_bio', 
             'primary_genre', 'subgenres', 'audience_tags', 'profile_photo', 
             'website_url', 'facebook_url', 'instagram_url', 'tiktok_url', 
-            'Collaboration_Status', 'created_at', 'updated_at'
+            'collaboration_status', 'created_at', 'updated_at'
         ]
     
     def get_subgenres(self, obj):

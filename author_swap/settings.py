@@ -40,6 +40,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'rest_framework.authtoken',
     'authentication',
+    'core',
 ]
 
 MIDDLEWARE = [
@@ -122,7 +123,7 @@ STATIC_ROOT = BASE_DIR / 'staticfiles'
 
 # Media files
 MEDIA_URL = '/authorswap/media/'
-MEDIA_ROOT = BASE_DIR / '/media'
+MEDIA_ROOT = BASE_DIR / 'media'
 
 # Django REST Framework settings
 REST_FRAMEWORK = {
