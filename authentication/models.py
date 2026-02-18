@@ -102,16 +102,29 @@ class UserProfile(models.Model):
             return self.audience_tags.split(",")
         return []
 
-    # 🔒 Validation
+   # Inside your UserProfile class
+
     def clean(self):
+        super().clean()
+        
+        # 1. Check max count (You already have this)
         if self.subgenres:
-            sub_list = self.subgenres.split(",")
+            sub_list = [s.strip() for s in self.subgenres.split(",") if s.strip()]
             if len(sub_list) > 3:
-                raise ValidationError("You can select a maximum of 3 subgenres")
+                raise ValidationError("You can select a maximum of 3 subgenres.")
 
-    def __str__(self):
-        return f"{self.user.username}'s Profile"
+            # 2. Strict Relationship Validation
+            if self.primary_genre:
+                # Get the allowed subgenres for the specific primary genre selected
+                allowed_tuples = GENRE_SUBGENRE_MAPPING.get(self.primary_genre, [])
+                # Extract just the keys (e.g., 'contemporary_romance')
+                allowed_keys = [item[0] for item in allowed_tuples]
 
+                for sub in sub_list:
+                    if sub not in allowed_keys:
+                        raise ValidationError(
+                            f"The subgenre '{sub}' is not valid for the {self.get_primary_genre_display()} category."
+                        )
     class Meta:
         db_table = "user_profile"
 
@@ -316,8 +329,9 @@ class GenrePreference(models.Model):
     
 
 class Subgenres(models.Model):
-    genre_preference = models.ForeignKey(GenrePreference, on_delete=models.CASCADE, related_name='genre_preference')
-    subgenre = models.CharField(max_length=50, choices=GENRE_SUBGENRE_MAPPING)
+    genre_preference = models.ForeignKey(GenrePreference, on_delete=models.CASCADE, related_name='subgenres')
+    # Use ALL_SUBGENRES here so the field knows all possible valid options
+    subgenre = models.CharField(max_length=50, choices=ALL_SUBGENRES)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
