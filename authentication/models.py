@@ -6,11 +6,7 @@ import secrets
 import random
 from django.core.exceptions import ValidationError
 
-COLLABORATION_STATUS = [
-    ("open", "Open to swaps"),
-    ("invite", "Invite only"),
-    ("closed", "Not accepting swaps"),
-]
+
 
 # =========================
 # GENRE SCHEMA
@@ -31,6 +27,26 @@ PRIMARY_GENRE_CHOICES = [
     ("comics_graphic", "Comics & Graphic Novels"),
 ]
 
+class Subgenre(models.Model):
+    """Stores all subgenres, linked to a parent primary genre"""
+    parent_genre = models.CharField(max_length=50, choices=PRIMARY_GENRE_CHOICES)
+    name = models.CharField(max_length=100)
+    slug = models.SlugField(max_length=100, unique=True)
+
+    def __str__(self):
+        return f"{self.get_parent_genre_display()} -> {self.name}"
+
+    class Meta:
+        ordering = ['parent_genre', 'name']
+
+
+class AudienceTag(models.Model):
+    """Stores Audience/Tone tags (e.g., Steamy, Clean, LGBTQ+)"""
+    name = models.CharField(max_length=50)
+    
+    def __str__(self):
+        return self.name
+
 AUDIENCE_TAG_CHOICES = [
     ("clean", "Clean / Sweet"),
     ("steamy", "Steamy"),
@@ -47,40 +63,37 @@ AUDIENCE_TAG_CHOICES = [
     ("short_reads", "Short Reads / Novellas"),
 ]
 
+COLLABORATION_STATUS = [
+    ("open to swap", "Open to Swaps"),
+    ("invite only", "Invite Only"),
+]
+
 class UserProfile(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='profile')
     profile_photo = models.ImageField(upload_to='profile_photos/', blank=True, null=True)
-
     pen_name = models.CharField(max_length=100, blank=True, null=True)
     author_bio = models.TextField(blank=True, null=True)
 
-    # Primary Genre
+    # 1. Primary Genre (Single Select)
     primary_genre = models.CharField(
         max_length=50,
         choices=PRIMARY_GENRE_CHOICES,
+        help_text="Required: Your main genre",
         blank=True,
         null=True
     )
 
-    # Store as comma-separated but validated
-    subgenres = models.CharField(
-        max_length=300,
-        blank=True,
-        null=True,
-        help_text="Comma separated values, max 3"
-    )
+    # 2. Subgenres (Multi-select, max 3)
+    # We use ManyToMany instead of comma-separated strings for better filtering
+    subgenres = models.ManyToManyField(Subgenre, blank=True)
 
-    audience_tags = models.CharField(
-        max_length=300,
-        blank=True,
-        null=True,
-        help_text="Comma separated values"
-    )
+    # 3. Audience Tags (Multi-select)
+    audience_tags = models.ManyToManyField(AudienceTag, blank=True)
 
     collaboration_status = models.CharField(
-        max_length=10,
-        choices=COLLABORATION_STATUS,
-        default="open"
+        max_length=20,
+        choices=COLLABORATION_STATUS,   
+        default="open to swap"
     )
 
     website_url = models.URLField(blank=True, null=True)
@@ -91,40 +104,15 @@ class UserProfile(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
-    # 🔎 Helper Methods
-    def get_subgenres_list(self):
-        if self.subgenres:
-            return self.subgenres.split(",")
-        return []
-
-    def get_audience_tags_list(self):
-        if self.audience_tags:
-            return self.audience_tags.split(",")
-        return []
-
-   # Inside your UserProfile class
-
     def clean(self):
+        """Custom validation for business rules"""
+        # Note: ManyToMany validation usually happens in forms/admin, 
+        # but we can add a check here for extra safety.
         super().clean()
         
-        # 1. Check max count (You already have this)
-        if self.subgenres:
-            sub_list = [s.strip() for s in self.subgenres.split(",") if s.strip()]
-            if len(sub_list) > 3:
-                raise ValidationError("You can select a maximum of 3 subgenres.")
+    def __str__(self):
+        return self.pen_name or self.user.username
 
-            # 2. Strict Relationship Validation
-            if self.primary_genre:
-                # Get the allowed subgenres for the specific primary genre selected
-                allowed_tuples = GENRE_SUBGENRE_MAPPING.get(self.primary_genre, [])
-                # Extract just the keys (e.g., 'contemporary_romance')
-                allowed_keys = [item[0] for item in allowed_tuples]
-
-                for sub in sub_list:
-                    if sub not in allowed_keys:
-                        raise ValidationError(
-                            f"The subgenre '{sub}' is not valid for the {self.get_primary_genre_display()} category."
-                        )
     class Meta:
         db_table = "user_profile"
 
@@ -147,17 +135,11 @@ class PasswordResetToken(models.Model):
 
 
 @receiver(post_save, sender=User)
-def create_user_profile(sender, instance, created, **kwargs):
+def manage_user_profile(sender, instance, created, **kwargs):
+    """Creates or updates profile whenever user is saved"""
     if created:
-        UserProfile.objects.get_or_create(user=instance)
-
-
-@receiver(post_save, sender=User)
-def save_user_profile(sender, instance, **kwargs):
-    try:
-        instance.profile.save()
-    except User.profile.RelatedObjectDoesNotExist:
         UserProfile.objects.create(user=instance)
+    instance.profile.save()
 
 
 @receiver(pre_delete, sender=User)

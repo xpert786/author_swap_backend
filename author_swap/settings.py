@@ -163,3 +163,7 @@ EMAIL_USE_TLS = True
 EMAIL_HOST_USER = 'harkirat.itinfonity@gmail.com'
 EMAIL_HOST_PASSWORD = 'xuji rgzh qkkp tpgk'
 DEFAULT_FROM_EMAIL = 'harkirat.itinfonity@gmail.com'
+
+# Default primary key field type
+# https://docs.djangoproject.com/en/6.0/ref/settings/#default-auto-field
+DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'

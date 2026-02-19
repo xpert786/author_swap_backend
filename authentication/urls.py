@@ -3,7 +3,8 @@ from rest_framework_simplejwt.views import TokenRefreshView
 from .views import (
     LoginAPIView, SignupAPIView, ForgotPasswordAPIView, ResetPasswordAPIView,
     AccountBasicsAPIView, OnlinePresenceAPIView, UserProfileReviewAPIView,
-    SubgenresByGenreAPIView, GenreChoicesAPIView
+    SubgenresByGenreAPIView, GenreChoicesAPIView, PrimaryGenreChoicesView,
+    AllSubgenresView, AudienceTagsView
 )
 
 urlpatterns = [
@@ -17,4 +18,7 @@ urlpatterns = [
     path('profile/review/', UserProfileReviewAPIView.as_view(), name='profile-review'),
     path('subgenres-by-genre/', SubgenresByGenreAPIView.as_view(), name='subgenres-by-genre'),
     path('genre-choices/', GenreChoicesAPIView.as_view(), name='genre-choices'),
-]
+    path('primary-genres/', PrimaryGenreChoicesView.as_view(), name='primary-genres'),
+    path('all-subgenres/', AllSubgenresView.as_view(), name='all-subgenres'),
+    path('audience-tags/', AudienceTagsView.as_view(), name='audience-tags'),
+]       

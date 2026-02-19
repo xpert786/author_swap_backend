@@ -1,7 +1,26 @@
 from rest_framework import serializers
 from .models import NewsletterSlot
 from authentication.models import GENRE_SUBGENRE_MAPPING
-from .models import Book
+from .models import Book, Profile, Notification
+
+class ProfileSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Profile
+        fields = '__all__'
+        read_only_fields = ['user']
+        extra_kwargs = {
+            'email': {'required': True},
+            'profile_picture': {'required': True},
+            'location': {'required': True},
+            'primary_genre': {'required': True},
+            'bio': {'required': True},
+            'instagram_url': {'required': True},
+            'tiktok_url': {'required': True},
+            'facebook_url': {'required': True},
+            'website': {'required': True},
+        }
+
+    username = serializers.CharField(source='user.username', read_only=True)
 
 class NewsletterSlotSerializer(serializers.ModelSerializer):
     subgenres = serializers.ListField(
@@ -67,6 +86,7 @@ class BookSerializer(serializers.ModelSerializer):
             'apple_url': {'required': True},
             'kobo_url': {'required': True},
             'barnes_noble_url': {'required': True},
+            'rating': {'required': True},
         }
 
     def validate(self, data):
@@ -105,3 +125,19 @@ class BookSerializer(serializers.ModelSerializer):
         else:
             repr['subgenres'] = []
         return repr
+
+class NotificationSerializer(serializers.ModelSerializer):
+    time_group = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Notification
+        fields = ['id', 'title', 'message', 'badge', 'action_url', 'is_read', 'created_at', 'time_group']
+
+    def get_time_group(self, obj):
+        now = timezone.now().date()
+        target = obj.created_at.date()
+        if target == now:
+            return "Today"
+        elif target == now - timedelta(days=1):
+            return "Yesterday"
+        return target.strftime("%d-%m-%Y")
