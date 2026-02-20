@@ -1,28 +1,50 @@
 from django.db import models
 from django.contrib.auth import get_user_model
-from authentication.models import PRIMARY_GENRE_CHOICES
+from authentication.constants import PRIMARY_GENRE_CHOICES
 
 User = get_user_model()
 
 class NewsletterSlot(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='newsletter_slots')
     send_date = models.DateField()
-    send_time = models.TimeField()
+    send_time = models.TimeField()  
+    status = models.CharField(max_length=20, choices=[('available', 'Available'), ('booked', 'Booked'),('pending', 'Pending')], default='available')    
+    @property
+    def time_period(self):
+        hour = self.send_time.hour
+        if 0 <= hour < 12:
+            return "Morning"    
+        elif 12 <= hour < 17:
+            return "Afternoon"
+        elif 17 <= hour < 21:
+            return "Evening"
+        else:
+            return "Night"
     audience_size = models.PositiveIntegerField(default=0)
     preferred_genre = models.CharField(max_length=50, choices=PRIMARY_GENRE_CHOICES)
     
     # Store subgenres as a comma-separated string
     subgenres = models.CharField(max_length=300, blank=True, null=True)
-    
     max_partners = models.PositiveIntegerField(default=5)
     visibility = models.CharField(
         max_length=30, 
         choices=[('public', 'Public'), ('friend_only', 'Friend Only'),('single_use_private_link', 'Single-use private link'),('hidden', 'Hidden')], 
         default='public'
     )
+    
+    # Advanced Discovery Fields
+    PLACEMENT_CHOICES = [('top', 'Top'), ('mid', 'Mid'), ('bottom', 'Bottom'), ('any', 'Any')]
+    placement_style = models.CharField(max_length=20, choices=PLACEMENT_CHOICES, default='any')
+    
+    PROMOTION_CHOICES = [('free', 'Free'), ('paid', 'Paid'), ('genre_specific', 'Genre-Specific')]
+    promotion_type = models.CharField(max_length=20, choices=PROMOTION_CHOICES, default='genre_specific')
+    
+    partner_requirements = models.TextField(blank=True, null=True)
+    
     created_at = models.DateTimeField(auto_now_add=True)
 
-    def __str__(self):
+
+    def __str__(self):   
         return f"{self.preferred_genre} slot on {self.send_date}"
 
 class Book(models.Model):
@@ -61,10 +83,34 @@ class Profile(models.Model):
     tiktok_url = models.URLField(blank=True, null=True)
     facebook_url = models.URLField(blank=True, null=True)
     website = models.URLField(blank=True, null=True)
+    reputation_score = models.FloatField(default=5.0) # 0 to 5
+    
+    # Analytics Breakdown (Mockup Details)
+    avg_open_rate = models.FloatField(default=0.0)
+    avg_click_rate = models.FloatField(default=0.0)
+    monthly_growth = models.PositiveIntegerField(default=0)
+    send_reliability_percent = models.FloatField(default=0.0)
+    
+    # Reputation Score Breakdown
+    confirmed_sends_score = models.PositiveIntegerField(default=0)
+    timeliness_score = models.PositiveIntegerField(default=0)
+    missed_sends_penalty = models.IntegerField(default=0)
+    communication_score = models.PositiveIntegerField(default=0)
+    
     created_at = models.DateTimeField(auto_now_add=True)
 
+
+
+    @property
+    def swaps_completed(self):
+        from .models import SwapRequest
+        # Count confirmed/verified requests where this profile's user is either the requester or the slot owner
+        sent_confirmed = self.user.sent_swap_requests.filter(status__in=['confirmed', 'verified']).count()
+        received_confirmed = SwapRequest.objects.filter(slot__user=self.user, status__in=['confirmed', 'verified']).count()
+        return sent_confirmed + received_confirmed
+
     def __str__(self):
-        return self.name   
+        return self.name
 
 class SwapRequest(models.Model):
     # The slot being requested (owned by *another* user)
@@ -72,6 +118,10 @@ class SwapRequest(models.Model):
     
     # The user making the request
     requester = models.ForeignKey(User, on_delete=models.CASCADE, related_name='sent_swap_requests')
+    
+    # The book being promoted in this swap
+    book = models.ForeignKey('Book', on_delete=models.CASCADE, related_name='swap_requests', null=True)
+
     
     # The status of the request
     STATUS_CHOICES = [
@@ -81,7 +131,15 @@ class SwapRequest(models.Model):
         ('rejected', 'Rejected'),
     ]
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    
+    # UI Modal Fields
+    message = models.TextField(max_length=250, blank=True, null=True)
+    PLACEMENT_CHOICES = [('top', 'Top'), ('middle', 'Middle'), ('bottom', 'Bottom')]
+    preferred_placement = models.CharField(max_length=10, choices=PLACEMENT_CHOICES, default='middle')
+    max_partners_acknowledged = models.PositiveIntegerField(default=5)
+    
     created_at = models.DateTimeField(auto_now_add=True)
+
 
     def __str__(self):
         return f"Request by {self.requester} for slot {self.slot}"

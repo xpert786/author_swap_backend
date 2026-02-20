@@ -2,7 +2,8 @@ from rest_framework import serializers
 from django.contrib.auth import authenticate
 from django.contrib.auth import get_user_model
 from django.utils.translation import gettext_lazy as _
-from .models import PasswordResetToken, UserProfile, PRIMARY_GENRE_CHOICES, ALL_SUBGENRES, AUDIENCE_TAG_CHOICES, GENRE_SUBGENRE_MAPPING, COLLABORATION_STATUS, Subgenre, AudienceTag
+from .models import PasswordResetToken, UserProfile, Subgenre, AudienceTag
+from .constants import PRIMARY_GENRE_CHOICES, ALL_SUBGENRES, AUDIENCE_TAG_CHOICES, GENRE_SUBGENRE_MAPPING, COLLABORATION_STATUS
 import json
 
 User = get_user_model()

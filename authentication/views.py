@@ -7,7 +7,7 @@ from django.contrib.auth import get_user_model
 from django.core.mail import send_mail
 from django.conf import settings
 from .serializers import LoginSerializer, SignupSerializer, ForgotPasswordSerializer, ResetPasswordSerializer, AccountBasicsSerializer, OnlinePresenceSerializer, UserProfileReviewSerializer
-from .models import PasswordResetToken, PRIMARY_GENRE_CHOICES, GENRE_SUBGENRE_MAPPING, AUDIENCE_TAG_CHOICES
+from .models import PasswordResetToken, UserProfile, PRIMARY_GENRE_CHOICES, GENRE_SUBGENRE_MAPPING, AUDIENCE_TAG_CHOICES
 
 User = get_user_model()
 
@@ -104,7 +104,7 @@ class AccountBasicsAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        profile = request.user.profile
+        profile, created = UserProfile.objects.get_or_create(user=request.user)
         serializer = AccountBasicsSerializer(profile, data=request.data)
         if serializer.is_valid():
             serializer.save()
@@ -119,7 +119,7 @@ class OnlinePresenceAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        profile = request.user.profile
+        profile, created = UserProfile.objects.get_or_create(user=request.user)
         serializer = OnlinePresenceSerializer(profile, data=request.data)
         if serializer.is_valid():
             serializer.save()
@@ -134,7 +134,7 @@ class UserProfileReviewAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        profile = request.user.profile
+        profile, created = UserProfile.objects.get_or_create(user=request.user)
         serializer = UserProfileReviewSerializer(profile)
         return Response({
             'message': 'User profile retrieved successfully.',
@@ -142,7 +142,7 @@ class UserProfileReviewAPIView(APIView):
         }, status=status.HTTP_200_OK)
 
     def put(self, request):
-        profile = request.user.profile
+        profile, created = UserProfile.objects.get_or_create(user=request.user)
         serializer = UserProfileReviewSerializer(profile, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
