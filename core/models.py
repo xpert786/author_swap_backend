@@ -39,6 +39,9 @@ class NewsletterSlot(models.Model):
     PROMOTION_CHOICES = [('free', 'Free'), ('paid', 'Paid'), ('genre_specific', 'Genre-Specific')]
     promotion_type = models.CharField(max_length=20, choices=PROMOTION_CHOICES, default='genre_specific')
     
+    # Added price for paid promotions based on UI mockups
+    price = models.DecimalField(max_digits=10, decimal_places=2, default=0.00, help_text="Set price if promotion_type is Paid")
+    
     partner_requirements = models.TextField(blank=True, null=True)
     
     created_at = models.DateTimeField(auto_now_add=True)
@@ -119,8 +122,14 @@ class SwapRequest(models.Model):
     # The user making the request
     requester = models.ForeignKey(User, on_delete=models.CASCADE, related_name='sent_swap_requests')
     
-    # The book being promoted in this swap
+    # The book being promoted in this swap ("You Send" book)
     book = models.ForeignKey('Book', on_delete=models.CASCADE, related_name='swap_requests', null=True)
+
+    # The slot the requester is offering in return ("You Send" slot)
+    offered_slot = models.ForeignKey(NewsletterSlot, on_delete=models.SET_NULL, related_name='offered_swap_requests', null=True, blank=True)
+    
+    # The book the requester wants the partner to promote ("Partner Sends" book)
+    requested_book = models.ForeignKey('Book', on_delete=models.SET_NULL, related_name='requested_in_swaps', null=True, blank=True)
 
     
     # The status of the request
