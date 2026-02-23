@@ -5,7 +5,7 @@ from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from .serializers import (
     NewsletterSlotSerializer, NotificationSerializer, SwapPartnerSerializer, 
-    SwapRequestSerializer, BookSerializer, ProfileSerializer, RecentSwapSerializer
+    SwapRequestSerializer, SwapManagementSerializer, BookSerializer, ProfileSerializer, RecentSwapSerializer
 )
 from authentication.constants import GENRE_SUBGENRE_MAPPING
 
@@ -18,7 +18,8 @@ from django.db.models import Count, Q
 
 from urllib.parse import urlencode
 from django.http import HttpResponse
-from django_filters.rest_framework import DjangoFilterBackend, FilterSet, NumberFilter, CharFilter
+from django_filters.rest_framework import DjangoFilterBackend, FilterSet, NumberFilter, CharFilter, DateFilter
+import requests
 
 
 
@@ -388,10 +389,12 @@ class NewsletterSlotFilter(FilterSet):
     min_reputation = NumberFilter(field_name="user__profiles__reputation_score", lookup_expr='gte')
     genre = CharFilter(field_name="preferred_genre")
     promotion = CharFilter(field_name="promotion_type")
+    start_date = DateFilter(field_name="send_date", lookup_expr='gte')
+    end_date = DateFilter(field_name="send_date", lookup_expr='lte')
 
     class Meta:
         model = NewsletterSlot
-        fields = ['genre', 'min_audience', 'max_audience', 'min_reputation', 'promotion', 'status']
+        fields = ['genre', 'min_audience', 'max_audience', 'min_reputation', 'promotion', 'status', 'start_date', 'end_date']
 
 class SwapPartnerDiscoveryView(ListCreateAPIView):
     """
@@ -419,6 +422,8 @@ class SwapRequestListView(APIView):
         serializer = SwapRequestSerializer(data=request.data)
         if serializer.is_valid():
             slot = serializer.validated_data['slot']
+            book = serializer.validated_data.get('book')
+
             if slot.user == request.user:
                 return Response({"detail": "You cannot request a swap for your own slot."}, status=status.HTTP_400_BAD_REQUEST)
             
@@ -426,8 +431,32 @@ class SwapRequestListView(APIView):
             if SwapRequest.objects.filter(slot=slot, requester=request.user).exists():
                 return Response({"detail": "You have already sent a request for this slot."}, status=status.HTTP_400_BAD_REQUEST)
 
-            serializer.save(requester=request.user)
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
+            # Link validation
+            if book:
+                links = [book.amazon_url, book.apple_url, book.kobo_url, book.barnes_noble_url]
+                for link in links:
+                    if link:
+                        try:
+                            r = requests.head(link, timeout=3, allow_redirects=True)
+                            if r.status_code >= 400:
+                                return Response({"detail": f"Retailer link {link} appears broken (HTTP {r.status_code})."}, status=status.HTTP_400_BAD_REQUEST)
+                        except requests.RequestException:
+                            return Response({"detail": f"Failed to reach retailer link: {link}."}, status=status.HTTP_400_BAD_REQUEST)
+
+            initial_status = 'pending'
+            target_profile = slot.user.profiles.first()
+            requester_profile = request.user.profiles.first()
+
+            if target_profile and requester_profile:
+                is_friend = target_profile.friends.filter(id=requester_profile.id).exists()
+                meets_rep = (target_profile.auto_approve_min_reputation > 0 and 
+                             requester_profile.reputation_score >= target_profile.auto_approve_min_reputation)
+                
+                if (target_profile.auto_approve_friends and is_friend) or meets_rep:
+                    initial_status = 'confirmed'
+
+            swap_req = serializer.save(requester=request.user, status=initial_status)
+            return Response(SwapRequestSerializer(swap_req).data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def get(self, request):
@@ -494,3 +523,189 @@ class RecentSwapHistoryView(ListAPIView):
             slot__user_id=author_id, 
             status__in=['confirmed', 'verified']
         ).order_by('-created_at')
+
+
+# =====================================================================
+# SWAP MANAGEMENT PAGE (Figma: "Swap Management")
+# =====================================================================
+from django.utils import timezone as tz
+from core.services.mailerlite_service import (
+    send_swap_request_notification,
+    approve_swap_notification,
+    reject_swap_notification,
+    sync_profile_audience,
+)
+
+
+class SwapManagementListView(APIView):
+    """
+    GET /api/swaps/
+    Returns swap requests grouped/filtered by tab.
+    Tabs: all, pending, sending, rejected, scheduled, completed
+    Also supports ?search=<query> for searching by author, book, or date.
+    """
+    permission_classes = [IsAuthenticated]
+
+    TAB_STATUS_MAP = {
+        'all': None,
+        'pending': ['pending'],
+        'sending': ['sending'],
+        'rejected': ['rejected'],
+        'scheduled': ['scheduled'],
+        'completed': ['completed', 'verified'],
+    }
+
+    def get(self, request):
+        user = request.user
+        tab = request.query_params.get('tab', 'all').lower()
+        search = request.query_params.get('search', '').strip()
+
+        # Base queryset: swaps where the current user owns the slot (received)
+        qs = SwapRequest.objects.filter(slot__user=user).select_related(
+            'requester', 'slot', 'book'
+        ).order_by('-created_at')
+
+        # Tab filtering
+        statuses = self.TAB_STATUS_MAP.get(tab)
+        if statuses:
+            qs = qs.filter(status__in=statuses)
+
+        # Search by author name, book title, or date
+        if search:
+            qs = qs.filter(
+                Q(requester__profiles__name__icontains=search) |
+                Q(requester__username__icontains=search) |
+                Q(book__title__icontains=search) |
+                Q(slot__send_date__icontains=search)
+            ).distinct()
+
+        # Sync audience from MailerLite for each unique requester (non-blocking)
+        try:
+            for swap in qs[:20]:  # Limit to avoid overloading
+                profile = swap.requester.profiles.first()
+                if profile:
+                    sync_profile_audience(profile)
+        except Exception:
+            pass  # MailerLite may not be configured; silently continue
+
+        serializer = SwapManagementSerializer(qs, many=True, context={'request': request})
+
+        # Tab counts for the badge numbers on each tab
+        all_qs = SwapRequest.objects.filter(slot__user=user)
+        tab_counts = {
+            'all': all_qs.count(),
+            'pending': all_qs.filter(status='pending').count(),
+            'sending': all_qs.filter(status='sending').count(),
+            'rejected': all_qs.filter(status='rejected').count(),
+            'scheduled': all_qs.filter(status='scheduled').count(),
+            'completed': all_qs.filter(status__in=['completed', 'verified']).count(),
+        }
+
+        return Response({
+            'tab': tab,
+            'tab_counts': tab_counts,
+            'results': serializer.data,
+        })
+
+
+class AcceptSwapView(APIView):
+    """
+    POST /api/accept-swap/<id>/
+    Slot owner accepts a swap request.
+    Moves subscriber from Pending → Approved in MailerLite.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        try:
+            swap = SwapRequest.objects.get(pk=pk, slot__user=request.user)
+        except SwapRequest.DoesNotExist:
+            return Response({"detail": "Swap request not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if swap.status not in ['pending']:
+            return Response({"detail": f"Cannot accept a swap in '{swap.status}' state."}, status=status.HTTP_400_BAD_REQUEST)
+
+        swap.status = 'confirmed'
+        swap.save()
+
+        # MailerLite: move from Pending → Approved group
+        requester_email = swap.requester.email
+        try:
+            approve_swap_notification(requester_email)
+        except Exception:
+            pass  # Non-critical; log internally
+
+        return Response({
+            "detail": "Swap request accepted.",
+            "swap": SwapManagementSerializer(swap, context={'request': request}).data
+        })
+
+
+class RejectSwapView(APIView):
+    """
+    POST /api/reject-swap/<id>/
+    Slot owner declines a swap request with an optional reason.
+    Body: { "reason": "Audience size too small for current campaign goals." }
+    Moves subscriber from Pending → Rejected group in MailerLite.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        try:
+            swap = SwapRequest.objects.get(pk=pk, slot__user=request.user)
+        except SwapRequest.DoesNotExist:
+            return Response({"detail": "Swap request not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if swap.status not in ['pending', 'confirmed']:
+            return Response({"detail": f"Cannot reject a swap in '{swap.status}' state."}, status=status.HTTP_400_BAD_REQUEST)
+
+        swap.status = 'rejected'
+        swap.rejection_reason = request.data.get('reason', '')
+        swap.rejected_at = tz.now()
+        swap.save()
+
+        # MailerLite: move to Rejected group
+        requester_email = swap.requester.email
+        try:
+            reject_swap_notification(requester_email)
+        except Exception:
+            pass
+
+        return Response({
+            "detail": "Swap request declined.",
+            "swap": SwapManagementSerializer(swap, context={'request': request}).data
+        })
+
+
+class RestoreSwapView(APIView):
+    """
+    POST /api/restore-swap/<id>/
+    Restores a previously rejected swap request back to pending.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        try:
+            swap = SwapRequest.objects.get(pk=pk, slot__user=request.user)
+        except SwapRequest.DoesNotExist:
+            return Response({"detail": "Swap request not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if swap.status != 'rejected':
+            return Response({"detail": "Only rejected swaps can be restored."}, status=status.HTTP_400_BAD_REQUEST)
+
+        swap.status = 'pending'
+        swap.rejection_reason = None
+        swap.rejected_at = None
+        swap.save()
+
+        # MailerLite: move back to Pending group
+        requester_email = swap.requester.email
+        try:
+            send_swap_request_notification(requester_email)
+        except Exception:
+            pass
+
+        return Response({
+            "detail": "Swap request restored to pending.",
+            "swap": SwapManagementSerializer(swap, context={'request': request}).data
+        })

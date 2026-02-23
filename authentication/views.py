@@ -83,6 +83,9 @@ class VerifyOTPAPIView(APIView):
     def post(self, request):
         serializer = VerifyOTPSerializer(data=request.data)
         if serializer.is_valid():
+            # Store the user's email in the session for the reset-password step
+            reset_token = serializer.validated_data['reset_token']
+            request.session['reset_email'] = reset_token.user.email
             return Response({
                 'message': 'OTP verified successfully.'
             }, status=status.HTTP_200_OK)
@@ -91,7 +94,19 @@ class VerifyOTPAPIView(APIView):
 
 class ResetPasswordAPIView(APIView):
     def post(self, request):
-        serializer = ResetPasswordSerializer(data=request.data)
+        # Get the email stored in the session during verify-otp
+        reset_email = request.session.get('reset_email')
+        if not reset_email:
+            return Response(
+                {"detail": "Session expired. Please verify your OTP again."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Inject email into the data so the serializer can find the user
+        data = request.data.copy()
+        data['email'] = reset_email
+
+        serializer = ResetPasswordSerializer(data=data)
         if serializer.is_valid():
             user = serializer.validated_data['user']
             reset_token = serializer.validated_data['reset_token']
@@ -102,6 +117,9 @@ class ResetPasswordAPIView(APIView):
             
             reset_token.is_used = True
             reset_token.save()
+
+            # Clean up the session
+            request.session.pop('reset_email', None)
             
             return Response({
                 'message': 'Password reset successfully.'

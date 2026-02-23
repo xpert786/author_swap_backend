@@ -4,7 +4,8 @@ from .views import (
     AddBookView, BookDetailView, ProfileDetailView, BookManagementStatsView, 
     NewsletterStatsView, NotificationListView, TestWebSocketNotificationView, 
     NewsletterSlotExportView, SwapPartnerDiscoveryView, SwapRequestListView, SwapRequestDetailView,
-    MyPotentialBooksView, SwapPartnerDetailView, RecentSwapHistoryView
+    MyPotentialBooksView, SwapPartnerDetailView, RecentSwapHistoryView,
+    SwapManagementListView, AcceptSwapView, RejectSwapView, RestoreSwapView,
 )
 from .ui_views import SlotExploreView, SlotDetailsView, SwapArrangementView
 
@@ -24,18 +25,18 @@ urlpatterns = [
     path('notifications/', NotificationListView.as_view(), name='notification-list'),
     path('test-notification/', TestWebSocketNotificationView.as_view(), name='test-notification'),
     path('newsletter-slot/<int:pk>/export/', NewsletterSlotExportView.as_view(), name='newsletter-slot-export'),
-    path('swap-partners/discovery/', SwapPartnerDiscoveryView.as_view(), name='swap-partner-discovery'),
-    path('swap-partners/discovery/<int:pk>/', SwapPartnerDetailView.as_view(), name='swap-partner-detail'),
-    path('swap-partners/discovery/<int:author_id>/history/', RecentSwapHistoryView.as_view(), name='author-swap-history'),
     path('swap-requests/', SwapRequestListView.as_view(), name='swap-request-list'),
     path('swap-requests/<int:pk>/', SwapRequestDetailView.as_view(), name='swap-request-detail'),
     path('my-books/', MyPotentialBooksView.as_view(), name='my-potential-books'),
     
+    # --- Swap Management Page (Figma) ---
+    path('swaps/', SwapManagementListView.as_view(), name='swap-management-list'),
+    path('accept-swap/<int:pk>/', AcceptSwapView.as_view(), name='accept-swap'),
+    path('reject-swap/<int:pk>/', RejectSwapView.as_view(), name='reject-swap'),
+    path('restore-swap/<int:pk>/', RestoreSwapView.as_view(), name='restore-swap'),
+
     # --- Figma UI Specific APIs ---
     path('slots/explore/', SlotExploreView.as_view(), name='slots-explore'),
     path('slots/<int:pk>/details/', SlotDetailsView.as_view(), name='slots-details'),
     path('swaps/<int:pk>/arrangement/', SwapArrangementView.as_view(), name='swaps-arrangement'),
 ]
-
-
-

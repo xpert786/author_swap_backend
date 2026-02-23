@@ -102,8 +102,10 @@ class Profile(models.Model):
     
     created_at = models.DateTimeField(auto_now_add=True)
 
-
-
+    # Auto-Approve logic and friends
+    auto_approve_friends = models.BooleanField(default=False)
+    auto_approve_min_reputation = models.FloatField(default=0.0)
+    friends = models.ManyToManyField('self', blank=True, symmetrical=True)
     @property
     def swaps_completed(self):
         from .models import SwapRequest
@@ -136,6 +138,9 @@ class SwapRequest(models.Model):
     STATUS_CHOICES = [
         ('pending', 'Pending'),
         ('confirmed', 'Confirmed'),
+        ('sending', 'Sending'),
+        ('scheduled', 'Scheduled'),
+        ('completed', 'Completed'),
         ('verified', 'Verified'),
         ('rejected', 'Rejected'),
     ]
@@ -146,6 +151,13 @@ class SwapRequest(models.Model):
     PLACEMENT_CHOICES = [('top', 'Top'), ('middle', 'Middle'), ('bottom', 'Bottom')]
     preferred_placement = models.CharField(max_length=10, choices=PLACEMENT_CHOICES, default='middle')
     max_partners_acknowledged = models.PositiveIntegerField(default=5)
+
+    # Rejection
+    rejection_reason = models.TextField(blank=True, null=True)
+    rejected_at = models.DateTimeField(blank=True, null=True)
+
+    # Scheduling
+    scheduled_date = models.DateField(blank=True, null=True)
     
     created_at = models.DateTimeField(auto_now_add=True)
 

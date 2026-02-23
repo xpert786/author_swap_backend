@@ -110,7 +110,7 @@ class VerifyOTPSerializer(serializers.Serializer):
 
 
 class ResetPasswordSerializer(serializers.Serializer):
-    otp = serializers.CharField(label=_("OTP"), max_length=6)
+    email = serializers.EmailField(label=_("Email"))
     new_password = serializers.CharField(
         label=_("New Password"),
         style={'input_type': 'password'},
@@ -125,16 +125,22 @@ class ResetPasswordSerializer(serializers.Serializer):
     )
 
     def validate(self, attrs):
-        otp = attrs.get('otp')
+        email = attrs.get('email')
         new_password = attrs.get('new_password')
         confirm_password = attrs.get('confirm_password')
 
         try:
-            reset_token = PasswordResetToken.objects.get(otp=otp, is_used=False)
-            attrs['user'] = reset_token.user
-            attrs['reset_token'] = reset_token
-        except PasswordResetToken.DoesNotExist:
-            raise serializers.ValidationError({"otp": _("Invalid OTP.")})
+            user = User.objects.get(email=email)
+        except User.DoesNotExist:
+            raise serializers.ValidationError({"email": _("No user found with this email address.")})
+
+        # Find the most recent unused token for this user
+        reset_token = PasswordResetToken.objects.filter(user=user, is_used=False).order_by('-created_at').first()
+        if not reset_token:
+            raise serializers.ValidationError({"email": _("No valid reset token found. Please request a new OTP.")})
+
+        attrs['user'] = user
+        attrs['reset_token'] = reset_token
 
         if new_password != confirm_password:
             raise serializers.ValidationError({"confirm_password": _("Passwords do not match.")})

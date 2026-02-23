@@ -208,9 +208,6 @@ class SwapRequestSerializer(serializers.ModelSerializer):
             # Audience Comparable (within 50% range)
             requester_profile = obj.requester.profiles.first()
             if requester_profile:
-                # Assuming the requester's audience is relevant. 
-                # For now, let's just check if the slot audience is within range of some benchmark
-                # or if we had requester audience size.
                 indicators["audience_comparable"] = True # Simplified logic
             
             # Reliability Match
@@ -221,6 +218,94 @@ class SwapRequestSerializer(serializers.ModelSerializer):
                 indicators["reliability_match"] = diff <= 1.0
                 
         return indicators
+
+
+class SwapManagementSerializer(serializers.ModelSerializer):
+    """
+    Serializer for the Swap Management page (Figma).
+    Returns all data needed for each swap card.
+    """
+    # Author info (the person who SENT the request)
+    author_name = serializers.SerializerMethodField()
+    author_genre_label = serializers.SerializerMethodField()
+    profile_picture = serializers.SerializerMethodField()
+
+    # Stats
+    audience_size = serializers.SerializerMethodField()
+    reliability_score = serializers.SerializerMethodField()
+
+    # Book
+    requesting_book = serializers.SerializerMethodField()
+
+    # Rejection info
+    rejection_info = serializers.SerializerMethodField()
+
+    # Scheduled
+    scheduled_label = serializers.SerializerMethodField()
+
+    class Meta:
+        model = SwapRequest
+        fields = [
+            'id', 'status', 'message', 'created_at',
+            'author_name', 'author_genre_label', 'profile_picture',
+            'audience_size', 'reliability_score',
+            'requesting_book',
+            'rejection_info', 'rejection_reason', 'rejected_at',
+            'scheduled_label', 'scheduled_date',
+            'preferred_placement', 'max_partners_acknowledged',
+        ]
+
+    def get_author_name(self, obj):
+        profile = obj.requester.profiles.first()
+        return profile.name if profile else obj.requester.username
+
+    def get_author_genre_label(self, obj):
+        profile = obj.requester.profiles.first()
+        if profile:
+            return f"{profile.get_primary_genre_display() if hasattr(profile, 'get_primary_genre_display') else profile.primary_genre}"
+        return ""
+
+    def get_profile_picture(self, obj):
+        profile = obj.requester.profiles.first()
+        if profile and profile.profile_picture:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(profile.profile_picture.url)
+            return profile.profile_picture.url
+        return None
+
+    def get_audience_size(self, obj):
+        # Use the slot's audience_size (synced from MailerLite)
+        slot = obj.slot
+        return f"{slot.audience_size:,}+" if slot else "0"
+
+    def get_reliability_score(self, obj):
+        profile = obj.requester.profiles.first()
+        if profile:
+            return f"{int(profile.send_reliability_percent)}%"
+        return "0%"
+
+    def get_requesting_book(self, obj):
+        if obj.book:
+            return {
+                "id": obj.book.id,
+                "title": obj.book.title,
+                "cover": obj.book.book_cover.url if obj.book.book_cover else None,
+            }
+        return None
+
+    def get_rejection_info(self, obj):
+        if obj.status == 'rejected' and obj.rejection_reason:
+            return {
+                "reason": obj.rejection_reason,
+                "rejected_on": obj.rejected_at.strftime("%B %d, %Y") if obj.rejected_at else None,
+            }
+        return None
+
+    def get_scheduled_label(self, obj):
+        if obj.scheduled_date:
+            return f"Scheduled for {obj.scheduled_date.strftime('%B %d %Y')}"
+        return None
 
 
 class SwapPartnerSerializer(serializers.ModelSerializer):

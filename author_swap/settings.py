@@ -11,7 +11,7 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
 from pathlib import Path
-
+import os
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -186,3 +186,9 @@ DEFAULT_FROM_EMAIL = 'harkirat.itinfonity@gmail.com'
 # Default primary key field type
 # https://docs.djangoproject.com/en/6.0/ref/settings/#default-auto-field
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# MailerLite Integration
+MAILERLITE_API_KEY = os.getenv('MAILERLITE_API_KEY')  # Set your MailerLite API key here
+MAILERLITE_PENDING_GROUP_ID = os.getenv('MAILERLITE_PENDING_GROUP_ID')  # MailerLite group for Pending Swaps
+MAILERLITE_APPROVED_GROUP_ID = os.getenv('MAILERLITE_APPROVED_GROUP_ID')  # MailerLite group for Approved/Active Swaps
+MAILERLITE_REJECTED_GROUP_ID = os.getenv('MAILERLITE_REJECTED_GROUP_ID')  # MailerLite group for Rejected Swaps
