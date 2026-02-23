@@ -17,7 +17,7 @@ class UserProfileAdmin(admin.ModelAdmin):
     search_fields = ['user__username', 'user__email', 'pen_name']
     fields = ['user', 'pen_name', 'author_bio', 'primary_genre', 'subgenres', 'audience_tags',
               'website_url', 'facebook_url', 'instagram_url', 'tiktok_url', 'collaboration_status',
-              'profile_photo', 'created_at', 'updated_at']
+              'profile_photo']
     readonly_fields = ['created_at', 'updated_at']
 
 @admin.register(PasswordResetToken)
