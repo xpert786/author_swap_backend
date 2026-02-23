@@ -6,7 +6,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth import get_user_model
 from django.core.mail import send_mail
 from django.conf import settings
-from .serializers import LoginSerializer, SignupSerializer, ForgotPasswordSerializer, ResetPasswordSerializer, AccountBasicsSerializer, OnlinePresenceSerializer, UserProfileReviewSerializer
+from .serializers import LoginSerializer, SignupSerializer, ForgotPasswordSerializer, VerifyOTPSerializer, ResetPasswordSerializer, AccountBasicsSerializer, OnlinePresenceSerializer, UserProfileReviewSerializer
 from .models import PasswordResetToken, UserProfile, PRIMARY_GENRE_CHOICES, GENRE_SUBGENRE_MAPPING, AUDIENCE_TAG_CHOICES
 
 User = get_user_model()
@@ -74,8 +74,17 @@ class ForgotPasswordAPIView(APIView):
             )
             
             return Response({
-                'message': 'Password reset OTP sent to your email.',
-                'otp': otp
+                'message': 'Password reset OTP sent to your email.'
+            }, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class VerifyOTPAPIView(APIView):
+    def post(self, request):
+        serializer = VerifyOTPSerializer(data=request.data)
+        if serializer.is_valid():
+            return Response({
+                'message': 'OTP verified successfully.'
             }, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 

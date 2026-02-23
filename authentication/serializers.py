@@ -96,6 +96,19 @@ class ForgotPasswordSerializer(serializers.Serializer):
         return value
 
 
+class VerifyOTPSerializer(serializers.Serializer):
+    otp = serializers.CharField(label=_("OTP"), max_length=6)
+
+    def validate(self, attrs):
+        otp = attrs.get('otp')
+        try:
+            reset_token = PasswordResetToken.objects.get(otp=otp, is_used=False)
+            attrs['reset_token'] = reset_token
+        except PasswordResetToken.DoesNotExist:
+            raise serializers.ValidationError({"otp": _("Invalid or expired OTP.")})
+        return attrs
+
+
 class ResetPasswordSerializer(serializers.Serializer):
     otp = serializers.CharField(label=_("OTP"), max_length=6)
     new_password = serializers.CharField(
