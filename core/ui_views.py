@@ -35,8 +35,10 @@ class SlotDetailsView(RetrieveAPIView):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        # Only the owner of the slot can manage it and see the partners
-        return NewsletterSlot.objects.filter(user=self.request.user)
+        # Allow viewing the user's own slots or any public available slot
+        return NewsletterSlot.objects.filter(
+            Q(user=self.request.user) | Q(visibility='public', status='available')
+        ).distinct()
 
 class SwapArrangementView(RetrieveAPIView):
     """

@@ -31,16 +31,31 @@ class SlotPartnerSerializer(serializers.ModelSerializer):
         model = SwapRequest
         fields = ['id', 'author', 'status', 'created_at']
 
+class AuthorDetailedProfileSerializer(serializers.ModelSerializer):
+    """Extended author profile with analytics and reputation for details modal"""
+    class Meta:
+        model = Profile
+        fields = [
+            'id', 'name', 'profile_picture', 'swaps_completed', 'reputation_score',
+            'avg_open_rate', 'avg_click_rate', 'monthly_growth', 'send_reliability_percent',
+            'confirmed_sends_score', 'timeliness_score', 'missed_sends_penalty', 'communication_score'
+        ]
+
 class SlotDetailsSerializer(serializers.ModelSerializer):
     """Serializer for Figma Screen 1 - Slot Details Modal"""
+    author = AuthorDetailedProfileSerializer(source='user.profiles.first', read_only=True)
+    current_partners_count = serializers.SerializerMethodField()
     swap_partners = serializers.SerializerMethodField()
     
     class Meta:
         model = NewsletterSlot
         fields = [
-            'id', 'send_date', 'send_time', 'audience_size', 'visibility', 
-            'status', 'preferred_genre', 'swap_partners'
+            'id', 'author', 'send_date', 'send_time', 'audience_size', 'visibility', 
+            'status', 'preferred_genre', 'current_partners_count', 'max_partners', 'swap_partners'
         ]
+
+    def get_current_partners_count(self, obj):
+        return obj.swap_requests.filter(status__in=['confirmed', 'verified']).count()
 
     def get_swap_partners(self, obj):
         requests = obj.swap_requests.filter(status__in=['confirmed', 'verified'])
