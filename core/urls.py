@@ -6,6 +6,7 @@ from .views import (
     NewsletterSlotExportView, SwapPartnerDiscoveryView, SwapRequestListView, SwapRequestDetailView,
     MyPotentialBooksView, SwapPartnerDetailView, RecentSwapHistoryView,
     SwapManagementListView, AcceptSwapView, RejectSwapView, RestoreSwapView,
+    SwapHistoryDetailView, TrackMySwapView, CancelSwapView,
 )
 from .ui_views import SlotExploreView, SlotDetailsView, SwapArrangementView
 
@@ -34,6 +35,9 @@ urlpatterns = [
     path('accept-swap/<int:pk>/', AcceptSwapView.as_view(), name='accept-swap'),
     path('reject-swap/<int:pk>/', RejectSwapView.as_view(), name='reject-swap'),
     path('restore-swap/<int:pk>/', RestoreSwapView.as_view(), name='restore-swap'),
+    path('swap-history/<int:pk>/', SwapHistoryDetailView.as_view(), name='swap-history-detail'),
+    path('track-swap/<int:pk>/', TrackMySwapView.as_view(), name='track-my-swap'),
+    path('cancel-swap/<int:pk>/', CancelSwapView.as_view(), name='cancel-swap'),
 
     # --- Figma UI Specific APIs ---
     path('slots/explore/', SlotExploreView.as_view(), name='slots-explore'),

@@ -159,11 +159,35 @@ class SwapRequest(models.Model):
     # Scheduling
     scheduled_date = models.DateField(blank=True, null=True)
     
+    # Completion
+    completed_at = models.DateTimeField(blank=True, null=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
 
 
     def __str__(self):
         return f"Request by {self.requester} for slot {self.slot}"
+
+
+class SwapLinkClick(models.Model):
+    """
+    Tracks link-level CTR analysis for completed swaps.
+    Each row = one tracked link in the swap partner's newsletter.
+    Shown on the 'View Swap History' detail page (Figma).
+    """
+    swap = models.ForeignKey(SwapRequest, on_delete=models.CASCADE, related_name='link_clicks')
+    link_name = models.CharField(max_length=255, help_text="e.g. 'The Midnight Garden'")
+    destination_url = models.URLField(help_text="e.g. https://amazon.com/dp/B0C123456")
+    clicks = models.PositiveIntegerField(default=0)
+    ctr = models.FloatField(default=0.0, help_text="Click-through rate as percentage, e.g. 4.1")
+    ctr_label = models.CharField(max_length=20, blank=True, default='', help_text="e.g. 'Excellent', 'Good', 'Low'")
+    conversions = models.PositiveIntegerField(default=0, help_text="Number of sales/conversions")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.link_name} → {self.clicks} clicks ({self.ctr}%)"
+
+
 class Notification(models.Model):
     # Badge labels as seen in image
     BADGE_CHOICES = [

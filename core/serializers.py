@@ -402,3 +402,282 @@ class SwapPartnerSerializer(serializers.ModelSerializer):
         if obj.send_date:
             return obj.send_date.strftime("%d %b %Y")
         return None
+
+
+# =====================================================================
+# SWAP HISTORY DETAIL (Figma: "Track My Swap" / "View Swap History")
+# =====================================================================
+from core.models import SwapLinkClick
+
+
+class SwapLinkClickSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SwapLinkClick
+        fields = ['id', 'link_name', 'destination_url', 'clicks', 'ctr', 'ctr_label', 'conversions']
+
+
+class SwapHistoryDetailSerializer(serializers.ModelSerializer):
+    """
+    Serializer for the 'View Swap History' detail page (Figma).
+    Shows: partner info, request/completed dates, links, promoting book, CTR analysis.
+    """
+    # Partner info (the OTHER user in this swap)
+    partner_name = serializers.SerializerMethodField()
+    partner_label = serializers.SerializerMethodField()
+    partner_genre = serializers.SerializerMethodField()
+    partner_profile_picture = serializers.SerializerMethodField()
+
+    # Dates
+    request_date = serializers.SerializerMethodField()
+    completed_date = serializers.SerializerMethodField()
+
+    # Status banner
+    status_label = serializers.SerializerMethodField()
+
+    # Partner's social links
+    partner_links = serializers.SerializerMethodField()
+
+    # Promoting book info
+    promoting_book = serializers.SerializerMethodField()
+
+    # Link-Level CTR analysis
+    link_ctr_analysis = serializers.SerializerMethodField()
+
+    class Meta:
+        model = SwapRequest
+        fields = [
+            'id', 'status',
+            'partner_name', 'partner_label', 'partner_genre', 'partner_profile_picture',
+            'request_date', 'completed_date', 'status_label',
+            'partner_links',
+            'promoting_book',
+            'link_ctr_analysis',
+            'message',
+        ]
+
+    def _get_partner(self, obj):
+        """Determine the partner: if I own the slot, partner is the requester. Otherwise, partner is the slot owner."""
+        request = self.context.get('request')
+        if request and obj.slot.user == request.user:
+            return obj.requester
+        return obj.slot.user
+
+    def get_partner_name(self, obj):
+        partner = self._get_partner(obj)
+        profile = partner.profiles.first()
+        return profile.name if profile else partner.username
+
+    def get_partner_label(self, obj):
+        return "Swap Partner"
+
+    def get_partner_genre(self, obj):
+        partner = self._get_partner(obj)
+        profile = partner.profiles.first()
+        if profile:
+            return f"{profile.get_primary_genre_display() if hasattr(profile, 'get_primary_genre_display') else profile.primary_genre} Writer"
+        return ""
+
+    def get_partner_profile_picture(self, obj):
+        partner = self._get_partner(obj)
+        profile = partner.profiles.first()
+        if profile and profile.profile_picture:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(profile.profile_picture.url)
+            return profile.profile_picture.url
+        return None
+
+    def get_request_date(self, obj):
+        if obj.created_at:
+            return obj.created_at.strftime("%d %b, %Y")
+        return None
+
+    def get_completed_date(self, obj):
+        if obj.completed_at:
+            return obj.completed_at.strftime("%d %b, %Y")
+        return None
+
+    def get_status_label(self, obj):
+        labels = {
+            'pending': 'Swap Pending',
+            'confirmed': 'Swap Confirmed',
+            'sending': 'Swap Sending',
+            'scheduled': 'Swap Scheduled',
+            'completed': 'Swap Completed',
+            'verified': 'Swap Verified',
+            'rejected': 'Swap Rejected',
+        }
+        return labels.get(obj.status, obj.get_status_display())
+
+    def get_partner_links(self, obj):
+        partner = self._get_partner(obj)
+        profile = partner.profiles.first()
+        if not profile:
+            return {}
+        return {
+            "website": profile.website or None,
+            "facebook": profile.facebook_url or None,
+            "instagram": profile.instagram_url or None,
+            "twitter": profile.tiktok_url or None,  # Using tiktok field for now
+        }
+
+    def get_promoting_book(self, obj):
+        book = obj.book
+        if not book:
+            return None
+        result = {
+            "id": book.id,
+            "title": book.title,
+            "cover": None,
+            "status": "Upcoming" if obj.status in ['pending', 'confirmed', 'sending', 'scheduled'] else "Completed",
+        }
+        if book.book_cover:
+            request = self.context.get('request')
+            if request:
+                result["cover"] = request.build_absolute_uri(book.book_cover.url)
+            else:
+                result["cover"] = book.book_cover.url
+        return result
+
+    def get_link_ctr_analysis(self, obj):
+        link_clicks = obj.link_clicks.all()
+        return SwapLinkClickSerializer(link_clicks, many=True).data
+
+
+# =====================================================================
+# TRACK MY SWAP MODAL (Figma: "Track My Swap" — active/pending swaps)
+# =====================================================================
+
+class TrackMySwapSerializer(serializers.ModelSerializer):
+    """
+    Serializer for the 'Track My Swap' modal (Figma).
+    Shows: partner info, promoting book, countdown deadline, request date, links.
+    Used for active swaps (pending/confirmed/sending/scheduled).
+    """
+    # Swapping With
+    partner_name = serializers.SerializerMethodField()
+    partner_genre = serializers.SerializerMethodField()
+    partner_profile_picture = serializers.SerializerMethodField()
+
+    # Promoting Book
+    promoting_book = serializers.SerializerMethodField()
+
+    # Countdown / Deadline
+    deadline = serializers.SerializerMethodField()
+    request_date = serializers.SerializerMethodField()
+    countdown_label = serializers.SerializerMethodField()
+
+    # Status
+    status_label = serializers.SerializerMethodField()
+
+    # Partner Links
+    partner_links = serializers.SerializerMethodField()
+
+    class Meta:
+        model = SwapRequest
+        fields = [
+            'id', 'status',
+            'partner_name', 'partner_genre', 'partner_profile_picture',
+            'promoting_book',
+            'deadline', 'request_date', 'countdown_label',
+            'status_label',
+            'partner_links',
+            'message',
+        ]
+
+    def _get_partner(self, obj):
+        request = self.context.get('request')
+        if request and obj.slot.user == request.user:
+            return obj.requester
+        return obj.slot.user
+
+    def get_partner_name(self, obj):
+        partner = self._get_partner(obj)
+        profile = partner.profiles.first()
+        return profile.name if profile else partner.username
+
+    def get_partner_genre(self, obj):
+        partner = self._get_partner(obj)
+        profile = partner.profiles.first()
+        if profile:
+            genre = profile.get_primary_genre_display() if hasattr(profile, 'get_primary_genre_display') else profile.primary_genre
+            return f"{genre} Writer"
+        return ""
+
+    def get_partner_profile_picture(self, obj):
+        partner = self._get_partner(obj)
+        profile = partner.profiles.first()
+        if profile and profile.profile_picture:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(profile.profile_picture.url)
+            return profile.profile_picture.url
+        return None
+
+    def get_promoting_book(self, obj):
+        book = obj.book
+        if not book:
+            return None
+        result = {
+            "id": book.id,
+            "title": book.title,
+            "genre": book.get_primary_genre_display() if hasattr(book, 'get_primary_genre_display') else book.primary_genre,
+            "cover": None,
+            "badge": "Upcoming" if obj.status in ['pending', 'confirmed', 'sending', 'scheduled'] else "Completed",
+        }
+        if book.book_cover:
+            request = self.context.get('request')
+            if request:
+                result["cover"] = request.build_absolute_uri(book.book_cover.url)
+            else:
+                result["cover"] = book.book_cover.url
+        return result
+
+    def get_deadline(self, obj):
+        """Deadline = slot's send_date + send_time formatted as 'dd MMM, YYYY hh:mmAM/PM'"""
+        from datetime import datetime
+        slot = obj.slot
+        if slot and slot.send_date and slot.send_time:
+            dt = datetime.combine(slot.send_date, slot.send_time)
+            return dt.strftime("%d %b, %Y %I:%M%p")
+        elif slot and slot.send_date:
+            return slot.send_date.strftime("%d %b, %Y")
+        return None
+
+    def get_request_date(self, obj):
+        if obj.created_at:
+            return obj.created_at.strftime("%d %b, %Y")
+        return None
+
+    def get_countdown_label(self, obj):
+        """Returns the book title and send_date for the countdown card."""
+        book = obj.book
+        slot = obj.slot
+        return {
+            "title": book.title if book else None,
+            "date": slot.send_date.strftime("%d %b %Y") if slot and slot.send_date else None,
+        }
+
+    def get_status_label(self, obj):
+        labels = {
+            'pending': 'Waiting for partner response',
+            'confirmed': 'Swap Confirmed',
+            'sending': 'Sending in progress',
+            'scheduled': 'Swap Scheduled',
+            'completed': 'Swap Completed',
+            'verified': 'Swap Verified',
+            'rejected': 'Swap Rejected',
+        }
+        return labels.get(obj.status, obj.get_status_display())
+
+    def get_partner_links(self, obj):
+        partner = self._get_partner(obj)
+        profile = partner.profiles.first()
+        if not profile:
+            return {}
+        return {
+            "website": profile.website or None,
+            "facebook": profile.facebook_url or None,
+            "instagram": profile.instagram_url or None,
+            "twitter": profile.tiktok_url or None,
+        }

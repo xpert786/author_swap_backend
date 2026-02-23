@@ -709,3 +709,86 @@ class RestoreSwapView(APIView):
             "detail": "Swap request restored to pending.",
             "swap": SwapManagementSerializer(swap, context={'request': request}).data
         })
+
+
+class SwapHistoryDetailView(APIView):
+    """
+    GET /api/swap-history/<id>/
+    Returns detailed swap history for the 'Track My Swap' / 'View Swap History' page (Figma).
+    Includes: partner info, dates, social links, promoting book, CTR analysis.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        from core.serializers import SwapHistoryDetailSerializer
+
+        try:
+            # User can view if they are the slot owner OR the requester
+            swap = SwapRequest.objects.select_related(
+                'requester', 'slot', 'book'
+            ).prefetch_related('link_clicks').get(
+                Q(slot__user=request.user) | Q(requester=request.user),
+                pk=pk,
+            )
+        except SwapRequest.DoesNotExist:
+            return Response({"detail": "Swap not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = SwapHistoryDetailSerializer(swap, context={'request': request})
+        return Response(serializer.data)
+
+
+class TrackMySwapView(APIView):
+    """
+    GET /api/track-swap/<id>/
+    Returns data for the 'Track My Swap' modal (Figma).
+    Shows: partner info, promoting book, countdown, deadline, links.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        from core.serializers import TrackMySwapSerializer
+
+        try:
+            swap = SwapRequest.objects.select_related(
+                'requester', 'slot', 'book'
+            ).get(
+                Q(slot__user=request.user) | Q(requester=request.user),
+                pk=pk,
+            )
+        except SwapRequest.DoesNotExist:
+            return Response({"detail": "Swap not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = TrackMySwapSerializer(swap, context={'request': request})
+        return Response(serializer.data)
+
+
+class CancelSwapView(APIView):
+    """
+    POST /api/cancel-swap/<id>/
+    Cancels an active swap request (from the Track My Swap modal).
+    Only the requester (who sent the swap request) can cancel it.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        try:
+            swap = SwapRequest.objects.get(pk=pk, requester=request.user)
+        except SwapRequest.DoesNotExist:
+            return Response({"detail": "Swap request not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if swap.status in ['completed', 'verified']:
+            return Response(
+                {"detail": f"Cannot cancel a swap in '{swap.status}' state."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        swap.status = 'rejected'
+        swap.rejection_reason = 'Cancelled by requester.'
+        swap.rejected_at = tz.now()
+        swap.save()
+
+        return Response({
+            "detail": "Swap request cancelled successfully.",
+            "swap_id": swap.id,
+            "status": swap.status,
+        })
