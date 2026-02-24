@@ -19,6 +19,8 @@ def create_user_profile(sender, instance, created, **kwargs):
             defaults={
                 'name': instance.username,
                 'email': instance.email or '',
+                'primary_genre': '',
+                'bio': '',
             }
         )
 

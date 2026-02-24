@@ -80,7 +80,7 @@ class Profile(models.Model):
     name = models.CharField(max_length=100)
     profile_picture = models.ImageField(upload_to='profile_pictures/', blank=True, null=True)
     location = models.CharField(max_length=100, blank=True, null=True)
-    primary_genre = models.CharField(max_length=50, choices=PRIMARY_GENRE_CHOICES, blank=True, null=True)
+    primary_genre = models.CharField(max_length=50, choices=PRIMARY_GENRE_CHOICES, blank=True, default='')
     bio = models.TextField(blank=True, default='')
     instagram_url = models.URLField(blank=True, null=True)
     tiktok_url = models.URLField(blank=True, null=True)
