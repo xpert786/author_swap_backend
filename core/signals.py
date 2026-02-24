@@ -10,11 +10,44 @@ from .serializers import NotificationSerializer
 User = get_user_model()
 
 
+def _sync_userprofile_to_core(user_profile, core_profile):
+    """Copy shared fields from authentication.UserProfile → core.Profile."""
+    changed = False
+
+    if user_profile.pen_name and user_profile.pen_name != core_profile.name:
+        core_profile.name = user_profile.pen_name
+        changed = True
+    if user_profile.author_bio and user_profile.author_bio != core_profile.bio:
+        core_profile.bio = user_profile.author_bio
+        changed = True
+    if user_profile.primary_genre and user_profile.primary_genre != core_profile.primary_genre:
+        core_profile.primary_genre = user_profile.primary_genre
+        changed = True
+    if user_profile.profile_photo and user_profile.profile_photo != core_profile.profile_picture:
+        core_profile.profile_picture = user_profile.profile_photo
+        changed = True
+
+    # Social URLs
+    for src, dst in [
+        ('website_url', 'website'),
+        ('facebook_url', 'facebook_url'),
+        ('instagram_url', 'instagram_url'),
+        ('tiktok_url', 'tiktok_url'),
+    ]:
+        val = getattr(user_profile, src, None)
+        if val and val != getattr(core_profile, dst, None):
+            setattr(core_profile, dst, val)
+            changed = True
+
+    if changed:
+        core_profile.save()
+
+
 @receiver(post_save, sender=User)
 def create_user_profile(sender, instance, created, **kwargs):
     """Auto-create a core.Profile when a new user registers."""
     if created:
-        Profile.objects.get_or_create(
+        core_profile, _ = Profile.objects.get_or_create(
             user=instance,
             defaults={
                 'name': instance.username,
@@ -23,6 +56,21 @@ def create_user_profile(sender, instance, created, **kwargs):
                 'bio': '',
             }
         )
+        # If UserProfile was already created (by the auth signal), sync its data
+        if hasattr(instance, 'profile') and instance.profile:
+            _sync_userprofile_to_core(instance.profile, core_profile)
+
+
+# Import UserProfile here to avoid circular imports
+from authentication.models import UserProfile
+
+
+@receiver(post_save, sender=UserProfile)
+def sync_user_profile_to_core_profile(sender, instance, **kwargs):
+    """Whenever UserProfile is updated (e.g. via admin), sync to core.Profile."""
+    core_profile = Profile.objects.filter(user=instance.user).first()
+    if core_profile:
+        _sync_userprofile_to_core(instance, core_profile)
 
 @receiver(post_save, sender=SwapRequest)
 def notify_new_swap(sender, instance, created, **kwargs):
