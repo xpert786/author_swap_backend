@@ -1,10 +1,26 @@
 import json
 from django.db.models.signals import post_save
 from django.dispatch import receiver
-from .models import SwapRequest, Notification
+from django.contrib.auth import get_user_model
+from .models import SwapRequest, Notification, Profile
 from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
 from .serializers import NotificationSerializer
+
+User = get_user_model()
+
+
+@receiver(post_save, sender=User)
+def create_user_profile(sender, instance, created, **kwargs):
+    """Auto-create a core.Profile when a new user registers."""
+    if created:
+        Profile.objects.get_or_create(
+            user=instance,
+            defaults={
+                'name': instance.username,
+                'email': instance.email or '',
+            }
+        )
 
 @receiver(post_save, sender=SwapRequest)
 def notify_new_swap(sender, instance, created, **kwargs):
