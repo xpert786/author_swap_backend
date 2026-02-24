@@ -42,7 +42,6 @@ class NewsletterSlotSerializer(serializers.ModelSerializer):
             'audience_size': {'required': True},
             'max_partners': {'required': True},
             'visibility': {'required': True},
-            'status': {'required': True},
         }
     def get_formatted_time(self, obj):
         if obj.send_time:
@@ -56,10 +55,32 @@ class NewsletterSlotSerializer(serializers.ModelSerializer):
     def validate(self, data):
         genre = data.get('preferred_genre')
         subs = data.get('subgenres', [])
-        
-        # Audience size custom validation if needed (e.g., must be > 0)
-        # but required=True is handled by extra_kwargs/framework
 
+        # ── Unique date + time check per user ──────────────────────────
+        send_date = data.get('send_date')
+        send_time = data.get('send_time')
+        request = self.context.get('request')
+
+        if send_date and send_time and request:
+            user = request.user
+            qs = NewsletterSlot.objects.filter(
+                user=user,
+                send_date=send_date,
+                send_time=send_time,
+            )
+            # If we are updating an existing slot, exclude it from the check
+            if self.instance:
+                qs = qs.exclude(pk=self.instance.pk)
+
+            if qs.exists():
+                raise serializers.ValidationError({
+                    "send_time": "You already have a newsletter slot scheduled on "
+                                 f"{send_date.strftime('%d-%m-%Y')} at "
+                                 f"{send_time.strftime('%I:%M %p')}. "
+                                 "Please choose a different date or time."
+                })
+
+        # ── Subgenre validation ────────────────────────────────────────
         if genre and subs:
              allowed_sub_tuples = GENRE_SUBGENRE_MAPPING.get(genre, [])
              allowed_keys = [item[0] for item in allowed_sub_tuples]
