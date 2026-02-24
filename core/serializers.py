@@ -25,6 +25,45 @@ class ProfileSerializer(serializers.ModelSerializer):
 
     username = serializers.CharField(source='user.username', read_only=True)
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+
+        # Pull data from authentication.UserProfile to fill empty fields
+        try:
+            from authentication.models import UserProfile
+            user_profile = UserProfile.objects.filter(user=instance.user).first()
+            if user_profile:
+                # Map: UserProfile field -> core.Profile serializer key
+                field_map = {
+                    'pen_name': 'name',
+                    'author_bio': 'bio',
+                    'primary_genre': 'primary_genre',
+                    'website_url': 'website',
+                    'facebook_url': 'facebook_url',
+                    'instagram_url': 'instagram_url',
+                    'tiktok_url': 'tiktok_url',
+                }
+                for src_field, dst_key in field_map.items():
+                    src_val = getattr(user_profile, src_field, None)
+                    if src_val and not data.get(dst_key):
+                        data[dst_key] = src_val
+
+                # Profile photo
+                if not data.get('profile_picture') and user_profile.profile_photo:
+                    request = self.context.get('request')
+                    if request:
+                        data['profile_picture'] = request.build_absolute_uri(user_profile.profile_photo.url)
+                    else:
+                        data['profile_picture'] = user_profile.profile_photo.url
+
+                # Email from User model
+                if not data.get('email') and instance.user.email:
+                    data['email'] = instance.user.email
+        except Exception:
+            pass
+
+        return data
+
 class NewsletterSlotSerializer(serializers.ModelSerializer):
     subgenres = serializers.ListField(
         child=serializers.CharField(), 
