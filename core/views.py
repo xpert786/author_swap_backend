@@ -174,7 +174,11 @@ class ProfileDetailView(RetrieveUpdateDestroyAPIView):
         queryset = self.get_queryset()
         obj = queryset.first()
         if obj is None:
-            raise Http404
+            from rest_framework.exceptions import NotFound
+            raise NotFound({
+                "detail": "Profile not found. Please create your profile first.",
+                "has_profile": False
+            })
         self.check_object_permissions(self.request, obj)
         return obj
     
