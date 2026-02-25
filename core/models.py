@@ -143,16 +143,16 @@ class SubscriberVerification(models.Model):
     is_connected_mailerlite = models.BooleanField(default=False)
     mailerlite_api_key_last_4 = models.CharField(max_length=4, blank=True)
     last_verified_at = models.DateTimeField(null=True, blank=True)
-    audience_size = models.PositiveIntegerField(default=12457)
-    avg_open_rate = models.FloatField(default=42.3)
-    avg_click_rate = models.FloatField(default=8.7)
-    list_health_score = models.PositiveIntegerField(default=87)
+    audience_size = models.PositiveIntegerField(default=0)
+    avg_open_rate = models.FloatField(default=0)
+    avg_click_rate = models.FloatField(default=0)
+    list_health_score = models.PositiveIntegerField(default=0)
     
     # Health Metrics
-    bounce_rate = models.FloatField(default=1.2)
-    unsubscribe_rate = models.FloatField(default=0.4)
-    active_rate = models.FloatField(default=94.0)
-    avg_engagement = models.FloatField(default=4.8)
+    bounce_rate = models.FloatField(default=0)
+    unsubscribe_rate = models.FloatField(default=0)
+    active_rate = models.FloatField(default=0)
+    avg_engagement = models.FloatField(default=0)
     
     def __str__(self):
         return f"{self.user.username} Verification"

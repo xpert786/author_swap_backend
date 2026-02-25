@@ -645,6 +645,15 @@ class AcceptSwapView(APIView):
         except Exception:
             pass  # Non-critical; log internally
 
+        # Notification for requester
+        Notification.objects.create(
+            recipient=swap.requester,
+            title="Swap Request Accepted! ✅",
+            badge="SWAP",
+            message=f"Good news! {request.user.username} has accepted your swap request for their {swap.slot.get_preferred_genre_display()} slot.",
+            action_url=f"/dashboard/swaps/track/{swap.id}/"
+        )
+
         return Response({
             "detail": "Swap request accepted.",
             "swap": SwapManagementSerializer(swap, context={'request': request}).data
@@ -681,6 +690,15 @@ class RejectSwapView(APIView):
         except Exception:
             pass
 
+        # Notification for requester
+        Notification.objects.create(
+            recipient=swap.requester,
+            title="Swap Request Update",
+            badge="SWAP",
+            message=f"Your swap request with {request.user.username} was not accepted at this time.",
+            action_url=f"/dashboard/swaps/"
+        )
+
         return Response({
             "detail": "Swap request declined.",
             "swap": SwapManagementSerializer(swap, context={'request': request}).data
@@ -714,6 +732,15 @@ class RestoreSwapView(APIView):
             send_swap_request_notification(requester_email)
         except Exception:
             pass
+
+        # Notification for requester
+        Notification.objects.create(
+            recipient=swap.requester,
+            title="Swap Request Restored 🔄",
+            badge="SWAP",
+            message=f"{request.user.username} has restored your rejected swap request back to pending.",
+            action_url=f"/dashboard/swaps/manage/"
+        )
 
         return Response({
             "detail": "Swap request restored to pending.",
@@ -797,6 +824,15 @@ class CancelSwapView(APIView):
         swap.rejected_at = tz.now()
         swap.save()
 
+        # Notification for slot owner
+        Notification.objects.create(
+            recipient=swap.slot.user,
+            title="Swap Cancelled 🛑",
+            badge="SWAP",
+            message=f"{request.user.username} has cancelled their swap request for your {swap.slot.send_date} slot.",
+            action_url=f"/dashboard/swaps/manage/"
+        )
+
         return Response({
             "detail": "Swap request cancelled successfully.",
             "swap_id": swap.id,
@@ -865,6 +901,15 @@ class ConnectMailerLiteView(APIView):
             verification.last_verified_at = timezone.now()
             verification.save()
             
+            # Notification for MailerLite connection
+            Notification.objects.create(
+                recipient=request.user,
+                title="MailerLite Connected! 🔗",
+                badge="VERIFIED",
+                message=f"Success! Your MailerLite account is connected. We found {audience:,} subscribers.",
+                action_url="/dashboard/subscriber-verification/"
+            )
+            
             return Response({
                 "message": "Successfully connected to MailerLite", 
                 "audience_size": audience
@@ -877,11 +922,16 @@ class SubscriberAnalyticsView(APIView):
     """
     GET /api/subscriber-analytics/
     Returns comprehensive analytics for the Subscriber Verification & Analytics page.
+    Triggers a real-time sync with MailerLite if connected.
     """
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        verification, _ = SubscriberVerification.objects.get_or_create(user=request.user)
+        from core.services.mailerlite_service import sync_subscriber_analytics
+        
+        # Trigger real-time sync
+        verification = sync_subscriber_analytics(request.user)
+        
         growth_data = SubscriberGrowth.objects.filter(user=request.user)
         campaigns = CampaignAnalytic.objects.filter(user=request.user)
         
