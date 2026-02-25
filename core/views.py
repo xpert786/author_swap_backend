@@ -515,8 +515,24 @@ class SwapRequestDetailView(RetrieveUpdateDestroyAPIView):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        # Allowing viewing of all swap requests for data retrieval
         return SwapRequest.objects.all()
+
+    def get(self, request, *args, **kwargs):
+        pk = kwargs.get('pk')
+        print(f"DEBUG: SwapRequestDetailView triggered for PK: {pk}")
+        try:
+            swap = SwapRequest.objects.get(pk=pk)
+            serializer = self.get_serializer(swap)
+            response = Response(serializer.data)
+            response['X-Debug-Status'] = 'Found-By-Me'
+            return response
+        except SwapRequest.DoesNotExist:
+            all_ids = list(SwapRequest.objects.values_list('id', flat=True)[:20])
+            print(f"DEBUG: PK {pk} not found. Available: {all_ids}")
+            return Response({
+                "detail": f"ID {pk} not found in DB.",
+                "available_ids": all_ids,
+            }, status=status.HTTP_404_NOT_FOUND)
 
     def perform_update(self, serializer):
         instance = self.get_object()
