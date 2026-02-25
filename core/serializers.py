@@ -319,18 +319,27 @@ class SwapManagementSerializer(serializers.ModelSerializer):
             'preferred_placement', 'max_partners_acknowledged',
         ]
 
+    def get_partner_user(self, obj):
+        request = self.context.get('request')
+        if request and request.user == obj.requester:
+            return obj.slot.user
+        return obj.requester
+
     def get_author_name(self, obj):
-        profile = obj.requester.profiles.first()
-        return profile.name if profile else obj.requester.username
+        partner = self.get_partner_user(obj)
+        profile = partner.profiles.first()
+        return profile.name if profile else partner.username
 
     def get_author_genre_label(self, obj):
-        profile = obj.requester.profiles.first()
+        partner = self.get_partner_user(obj)
+        profile = partner.profiles.first()
         if profile:
             return f"{profile.get_primary_genre_display() if hasattr(profile, 'get_primary_genre_display') else profile.primary_genre}"
         return ""
 
     def get_profile_picture(self, obj):
-        profile = obj.requester.profiles.first()
+        partner = self.get_partner_user(obj)
+        profile = partner.profiles.first()
         if profile and profile.profile_picture:
             request = self.context.get('request')
             if request:
@@ -344,7 +353,8 @@ class SwapManagementSerializer(serializers.ModelSerializer):
         return f"{slot.audience_size:,}+" if slot else "0"
 
     def get_reliability_score(self, obj):
-        profile = obj.requester.profiles.first()
+        partner = self.get_partner_user(obj)
+        profile = partner.profiles.first()
         if profile:
             return f"{int(profile.send_reliability_percent)}%"
         return "0%"

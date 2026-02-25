@@ -591,8 +591,10 @@ class SwapManagementListView(APIView):
         tab = request.query_params.get('tab', 'all').lower()
         search = request.query_params.get('search', '').strip()
 
-        # Base queryset: swaps where the current user owns the slot (received)
-        qs = SwapRequest.objects.filter(slot__user=user).select_related(
+        # Base queryset: swaps where the current user is either the requester (sent) or owns the slot (received)
+        qs = SwapRequest.objects.filter(
+            Q(slot__user=user) | Q(requester=user)
+        ).select_related(
             'requester', 'slot', 'book'
         ).order_by('-created_at')
 
@@ -622,7 +624,7 @@ class SwapManagementListView(APIView):
         serializer = SwapManagementSerializer(qs, many=True, context={'request': request})
 
         # Tab counts for the badge numbers on each tab
-        all_qs = SwapRequest.objects.filter(slot__user=user)
+        all_qs = SwapRequest.objects.filter(Q(slot__user=user) | Q(requester=user))
         tab_counts = {
             'all': all_qs.count(),
             'pending': all_qs.filter(status='pending').count(),
