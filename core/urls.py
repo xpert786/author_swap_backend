@@ -6,7 +6,7 @@ from .views import (
     NewsletterSlotExportView, SwapPartnerDiscoveryView, SwapRequestListView, SwapRequestDetailView,
     MyPotentialBooksView, SwapPartnerDetailView, RecentSwapHistoryView,
     SwapManagementListView, AcceptSwapView, RejectSwapView, RestoreSwapView,
-    SwapHistoryDetailView, TrackMySwapView, CancelSwapView,
+    SwapHistoryDetailView, TrackMySwapView, CancelSwapView, AuthorReputationView
 )
 from .ui_views import SlotExploreView, SlotDetailsView, SwapArrangementView
 
@@ -43,4 +43,6 @@ urlpatterns = [
     path('slots/explore/', SlotExploreView.as_view(), name='slots-explore'),
     path('slots/<int:pk>/details/', SlotDetailsView.as_view(), name='slots-details'),
     path('swaps/<int:pk>/arrangement/', SwapArrangementView.as_view(), name='swaps-arrangement'),
+    
+    path('author-reputation/', AuthorReputationView.as_view(), name='author-reputation'),
 ]

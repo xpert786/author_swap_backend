@@ -796,3 +796,20 @@ class CancelSwapView(APIView):
             "swap_id": swap.id,
             "status": swap.status,
         })
+
+class AuthorReputationView(APIView):
+    """
+    GET /api/author-reputation/
+    Returns the current user's reputation score, badges, and breakdown
+    based on the Author Reputation System UI.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from core.serializers import AuthorReputationSerializer
+        profile = request.user.profiles.first()
+        if not profile:
+            return Response({"detail": "Profile not found. Please create a profile first."}, status=status.HTTP_404_NOT_FOUND)
+        
+        serializer = AuthorReputationSerializer(profile, context={'request': request})
+        return Response(serializer.data)

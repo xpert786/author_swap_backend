@@ -741,3 +741,84 @@ class TrackMySwapSerializer(serializers.ModelSerializer):
             "instagram": profile.instagram_url or None,
             "twitter": profile.tiktok_url or None,
         }
+
+
+class AuthorReputationSerializer(serializers.ModelSerializer):
+    reputation_score = serializers.SerializerMethodField()
+    platform_ranking = serializers.SerializerMethodField()
+    reputation_badges = serializers.SerializerMethodField()
+    reputation_score_breakdown = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Profile
+        fields = [
+            'reputation_score',
+            'is_webhook_verified',
+            'platform_ranking',
+            'reputation_badges',
+            'reputation_score_breakdown',
+        ]
+
+    def get_reputation_score(self, obj):
+        return {
+            "score": int(obj.reputation_score),
+            "max": 100
+        }
+
+    def get_platform_ranking(self, obj):
+        return {
+            "rank": obj.platform_ranking_position,
+            "percentile": obj.platform_ranking_percentile
+        }
+
+    def get_reputation_badges(self, obj):
+        return [
+            {
+                "name": "Verified Sender",
+                "description": "Complete 10+ swaps with verification",
+                "status": "Earned"
+            },
+            {
+                "name": "100% Reliability",
+                "description": "Perfect send record for 30 days",
+                "status": "Active"
+            },
+            {
+                "name": "Top Swap Partner",
+                "description": "Top 10% of all authors in reliability",
+                "status": "Earned"
+            },
+            {
+                "name": "Fast Communicator",
+                "description": "Average response time under 2 hours",
+                "status": "Locked"
+            }
+        ]
+
+    def get_reputation_score_breakdown(self, obj):
+        return {
+            "confirmed_sends": {
+                "score": obj.confirmed_sends_score,
+                "max": 50,
+                "description": f"{int(obj.confirmed_sends_success_rate)}% success rate",
+                "points": f"+{obj.confirmed_sends_score} points"
+            },
+            "timeliness": {
+                "score": obj.timeliness_score,
+                "max": 30,
+                "description": f"{int(obj.timeliness_success_rate)} % success rate",
+                "points": f"+{obj.timeliness_score} points"
+            },
+            "missed_sends": {
+                "score": abs(obj.missed_sends_penalty),
+                "max": 30,
+                "description": f"{obj.missed_sends_count} missed sends",
+                "points": f"{obj.missed_sends_penalty} points"
+            },
+            "communication": {
+                "score": obj.communication_score,
+                "max": 30,
+                "description": f"{obj.avg_response_time_hours}h avg response",
+                "points": f"+{obj.communication_score} points"
+            }
+        }

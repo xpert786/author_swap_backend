@@ -86,7 +86,7 @@ class Profile(models.Model):
     tiktok_url = models.URLField(blank=True, null=True)
     facebook_url = models.URLField(blank=True, null=True)
     website = models.URLField(blank=True, null=True)
-    reputation_score = models.FloatField(default=5.0) # 0 to 5
+    reputation_score = models.FloatField(default=0.0) # 0 to 100 based on mockup
     
     # Analytics Breakdown (Mockup Details)
     avg_open_rate = models.FloatField(default=0.0)
@@ -99,6 +99,15 @@ class Profile(models.Model):
     timeliness_score = models.PositiveIntegerField(default=0)
     missed_sends_penalty = models.IntegerField(default=0)
     communication_score = models.PositiveIntegerField(default=0)
+    
+    # Advanced Reputation fields (Author Reputation System)
+    is_webhook_verified = models.BooleanField(default=True)
+    platform_ranking_position = models.PositiveIntegerField(default=0)
+    platform_ranking_percentile = models.PositiveIntegerField(default=0)
+    confirmed_sends_success_rate = models.FloatField(default=0.0)
+    timeliness_success_rate = models.FloatField(default=0.0)
+    missed_sends_count = models.PositiveIntegerField(default=0)
+    avg_response_time_hours = models.FloatField(default=0.0)
     
     created_at = models.DateTimeField(auto_now_add=True)
 
