@@ -1,6 +1,7 @@
-from django.urls import re_path
+# core/routing.py
+from django.urls import path
 from .consumers import NotificationConsumer
 
 websocket_urlpatterns = [
-    re_path(r'authorswap/ws/notification/$', NotificationConsumer.as_asgi()),
+    path("authorswap/ws/notifications/", NotificationConsumer.as_asgi()),
 ]
