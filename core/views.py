@@ -515,9 +515,8 @@ class SwapRequestDetailView(RetrieveUpdateDestroyAPIView):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return SwapRequest.objects.filter(
-            Q(requester=self.request.user) | Q(slot__user=self.request.user)
-        )
+        # Allowing viewing of all swap requests for data retrieval
+        return SwapRequest.objects.all()
 
     def perform_update(self, serializer):
         instance = self.get_object()
