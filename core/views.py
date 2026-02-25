@@ -514,6 +514,13 @@ class SwapRequestDetailView(RetrieveAPIView):
     def get_queryset(self):
         return NewsletterSlot.objects.all()
 
+    def post(self, request, *args, **kwargs):
+        """
+        Creates a swap request for this specific slot.
+        """
+        slot_id = kwargs.get('pk')
+        return SwapRequestListView().post(request, slot_id=slot_id)
+
 class MyPotentialBooksView(ListAPIView):
     """
     Lists the current user's books to choose from when initiating a swap.
