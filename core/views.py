@@ -5,12 +5,18 @@ from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from .serializers import (
     NewsletterSlotSerializer, NotificationSerializer, SwapPartnerSerializer, 
-    SwapRequestSerializer, SwapManagementSerializer, BookSerializer, ProfileSerializer, RecentSwapSerializer
+    SwapRequestSerializer, SwapManagementSerializer, BookSerializer, ProfileSerializer, RecentSwapSerializer,
+    SubscriptionTierSerializer, UserSubscriptionSerializer, SubscriberVerificationSerializer,
+    SubscriberGrowthSerializer, CampaignAnalyticSerializer
 )
 from authentication.constants import GENRE_SUBGENRE_MAPPING
 
 
-from .models import Book, NewsletterSlot, Profile, SwapRequest, Notification
+from .models import (
+    Book, NewsletterSlot, Profile, SwapRequest, Notification, 
+    SubscriptionTier, UserSubscription, SubscriberVerification,
+    SubscriberGrowth, CampaignAnalytic
+)
 import calendar
 from datetime import datetime, date, timedelta
 from rest_framework.generics import ListAPIView, RetrieveAPIView, ListCreateAPIView, RetrieveUpdateDestroyAPIView
@@ -813,3 +819,87 @@ class AuthorReputationView(APIView):
         
         serializer = AuthorReputationSerializer(profile, context={'request': request})
         return Response(serializer.data)
+
+
+class SubscriberVerificationView(APIView):
+    """
+    GET /api/subscriber-verification/
+    Returns user's verification status, current subscription, and available tiers.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        verification, _ = SubscriberVerification.objects.get_or_create(user=request.user)
+        subscription = UserSubscription.objects.filter(user=request.user, is_active=True).first()
+        tiers = SubscriptionTier.objects.all().order_by('price')
+        
+        return Response({
+            "verification": SubscriberVerificationSerializer(verification).data,
+            "subscription": UserSubscriptionSerializer(subscription).data if subscription else None,
+            "available_tiers": SubscriptionTierSerializer(tiers, many=True).data,
+        })
+
+
+class ConnectMailerLiteView(APIView):
+    """
+    POST /api/connect-mailerlite/
+    Connects user's account to MailerLite using an API key.
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def post(self, request):
+        api_key = request.data.get('api_key')
+        if not api_key:
+            return Response({"error": "API Key is required"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        from core.services.mailerlite_service import sync_profile_audience
+        from django.utils import timezone
+        
+        profile = request.user.profiles.first()
+        if profile:
+            audience = sync_profile_audience(profile)
+            verification, _ = SubscriberVerification.objects.get_or_create(user=request.user)
+            verification.is_connected_mailerlite = True
+            verification.mailerlite_api_key_last_4 = api_key[-4:]
+            verification.audience_size = audience
+            verification.last_verified_at = timezone.now()
+            verification.save()
+            
+            return Response({
+                "message": "Successfully connected to MailerLite", 
+                "audience_size": audience
+            })
+        
+        return Response({"error": "Profile not found"}, status=status.HTTP_404_NOT_FOUND)
+
+
+class SubscriberAnalyticsView(APIView):
+    """
+    GET /api/subscriber-analytics/
+    Returns comprehensive analytics for the Subscriber Verification & Analytics page.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        verification, _ = SubscriberVerification.objects.get_or_create(user=request.user)
+        growth_data = SubscriberGrowth.objects.filter(user=request.user)
+        campaigns = CampaignAnalytic.objects.filter(user=request.user)
+        
+        return Response({
+            "summary_stats": {
+                "active_subscribers": verification.audience_size,
+                "avg_open_rate": f"{verification.avg_open_rate}%",
+                "avg_click_rate": f"{verification.avg_click_rate}%",
+                "list_health_score": f"{verification.list_health_score}/100",
+            },
+            "growth_chart": SubscriberGrowthSerializer(growth_data, many=True).data,
+            "list_health_metrics": {
+                "bounce_rate": f"{verification.bounce_rate}%",
+                "unsubscribe_rate": f"{verification.unsubscribe_rate}%",
+                "active_rate": f"{verification.active_rate}%",
+                "avg_engagement": verification.avg_engagement,
+            },
+            "campaign_analytics": CampaignAnalyticSerializer(campaigns, many=True).data,
+            # Link-level analysis is handled per-campaign or as a general summary here
+            "link_level_ctr": [] # Placeholder for now as it depends on campaign selection in UI
+        })

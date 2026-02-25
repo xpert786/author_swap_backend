@@ -6,7 +6,8 @@ from .views import (
     NewsletterSlotExportView, SwapPartnerDiscoveryView, SwapRequestListView, SwapRequestDetailView,
     MyPotentialBooksView, SwapPartnerDetailView, RecentSwapHistoryView,
     SwapManagementListView, AcceptSwapView, RejectSwapView, RestoreSwapView,
-    SwapHistoryDetailView, TrackMySwapView, CancelSwapView, AuthorReputationView
+    SwapHistoryDetailView, TrackMySwapView, CancelSwapView, AuthorReputationView,
+    SubscriberVerificationView, ConnectMailerLiteView, SubscriberAnalyticsView
 )
 from .ui_views import SlotExploreView, SlotDetailsView, SwapArrangementView
 
@@ -45,4 +46,7 @@ urlpatterns = [
     path('swaps/<int:pk>/arrangement/', SwapArrangementView.as_view(), name='swaps-arrangement'),
     
     path('author-reputation/', AuthorReputationView.as_view(), name='author-reputation'),
+    path('subscriber-verification/', SubscriberVerificationView.as_view(), name='subscriber-verification'),
+    path('connect-mailerlite/', ConnectMailerLiteView.as_view(), name='connect-mailerlite'),
+    path('subscriber-analytics/', SubscriberAnalyticsView.as_view(), name='subscriber-analytics'),
 ]

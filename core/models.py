@@ -115,6 +115,68 @@ class Profile(models.Model):
     auto_approve_friends = models.BooleanField(default=False)
     auto_approve_min_reputation = models.FloatField(default=0.0)
     friends = models.ManyToManyField('self', blank=True, symmetrical=True)
+
+class SubscriptionTier(models.Model):
+    name = models.CharField(max_length=50) # Tier 1, Tier 2, etc.
+    price = models.DecimalField(max_digits=10, decimal_places=2)
+    label = models.CharField(max_length=50, blank=True) # Swap Only, Starter, etc.
+    is_most_popular = models.BooleanField(default=False)
+    features = models.JSONField(default=list) # List of feature strings
+    best_for = models.TextField(blank=True)
+    
+    def __str__(self):
+        return self.name
+
+class UserSubscription(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='subscription')
+    tier = models.ForeignKey(SubscriptionTier, on_delete=models.PROTECT)
+    active_until = models.DateField()
+    renew_date = models.DateField()
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    def __str__(self):
+        return f"{self.user.username} - {self.tier.name}"
+
+class SubscriberVerification(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='verification')
+    is_connected_mailerlite = models.BooleanField(default=False)
+    mailerlite_api_key_last_4 = models.CharField(max_length=4, blank=True)
+    last_verified_at = models.DateTimeField(null=True, blank=True)
+    audience_size = models.PositiveIntegerField(default=12457)
+    avg_open_rate = models.FloatField(default=42.3)
+    avg_click_rate = models.FloatField(default=8.7)
+    list_health_score = models.PositiveIntegerField(default=87)
+    
+    # Health Metrics
+    bounce_rate = models.FloatField(default=1.2)
+    unsubscribe_rate = models.FloatField(default=0.4)
+    active_rate = models.FloatField(default=94.0)
+    avg_engagement = models.FloatField(default=4.8)
+    
+    def __str__(self):
+        return f"{self.user.username} Verification"
+
+class SubscriberGrowth(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='subscriber_growth')
+    month = models.CharField(max_length=10) # Jan, Feb, etc.
+    count = models.PositiveIntegerField()
+    year = models.PositiveIntegerField(default=2024)
+
+    class Meta:
+        ordering = ['year', 'id']
+
+class CampaignAnalytic(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='campaign_analytics')
+    name = models.CharField(max_length=255) # June Newsletter - Romance Special
+    date = models.DateField()
+    subscribers = models.PositiveIntegerField()
+    open_rate = models.FloatField()
+    click_rate = models.FloatField()
+    type = models.CharField(max_length=50, default='Recent') # Recent, Top Performing, Swap Campaigns
+    
+    def __str__(self):
+        return self.name
     @property
     def swaps_completed(self):
         from .models import SwapRequest

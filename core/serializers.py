@@ -1,7 +1,11 @@
 from rest_framework import serializers
 from .models import NewsletterSlot
 from authentication.models import GENRE_SUBGENRE_MAPPING
-from .models import Book, Profile, Notification, SwapRequest
+from .models import (
+    Book, Profile, Notification, SwapRequest, 
+    SubscriptionTier, UserSubscription, SubscriberVerification,
+    SubscriberGrowth, CampaignAnalytic
+)
 
 from django.utils import timezone
 from datetime import timedelta
@@ -743,6 +747,26 @@ class TrackMySwapSerializer(serializers.ModelSerializer):
         }
 
 
+class SubscriptionTierSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SubscriptionTier
+        fields = '__all__'
+
+
+class UserSubscriptionSerializer(serializers.ModelSerializer):
+    tier_details = SubscriptionTierSerializer(source='tier', read_only=True)
+
+    class Meta:
+        model = UserSubscription
+        fields = '__all__'
+
+
+class SubscriberVerificationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SubscriberVerification
+        fields = '__all__'
+
+
 class AuthorReputationSerializer(serializers.ModelSerializer):
     reputation_score = serializers.SerializerMethodField()
     platform_ranking = serializers.SerializerMethodField()
@@ -822,3 +846,20 @@ class AuthorReputationSerializer(serializers.ModelSerializer):
                 "points": f"+{obj.communication_score} points"
             }
         }
+
+
+class SubscriberGrowthSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SubscriberGrowth
+        fields = '__all__'
+
+
+class CampaignAnalyticSerializer(serializers.ModelSerializer):
+    formatted_date = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CampaignAnalytic
+        fields = '__all__'
+
+    def get_formatted_date(self, obj):
+        return obj.date.strftime("%B %d, %Y")
