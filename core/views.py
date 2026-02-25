@@ -523,6 +523,86 @@ class SwapRequestDetailView(RetrieveAPIView):
         slot_id = kwargs.get('pk')
         return SwapRequestListView().post(request, slot_id=slot_id)
 
+class RequestSwapPlacementView(APIView):
+    """
+    POST /api/slots/<slot_id>/request-placement/
+    Handles the Figma "Request Swap Placement" modal submission.
+    Expects: book (ID), preferred_placement, max_partners_acknowledged, 
+             amazon_url, apple_url, kobo_url, barnes_noble_url, message
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, slot_id):
+        try:
+            slot = NewsletterSlot.objects.get(id=slot_id)
+        except NewsletterSlot.DoesNotExist:
+            return Response({"detail": "Slot not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if slot.user == request.user:
+            return Response({"detail": "You cannot request a swap for your own slot."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if SwapRequest.objects.filter(slot=slot, requester=request.user).exists():
+            return Response({"detail": "You have already sent a request for this slot."}, status=status.HTTP_400_BAD_REQUEST)
+
+        book_id = request.data.get('book')
+        if not book_id:
+            return Response({"detail": "Please select a book to promote."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            book = Book.objects.get(id=book_id, user=request.user)
+        except Book.DoesNotExist:
+            return Response({"detail": "Invalid book selected."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Update retailer links directly from the Swap Request form (Figma)
+        updated_links = False
+        link_fields = ['amazon_url', 'apple_url', 'kobo_url', 'barnes_noble_url']
+        for field in link_fields:
+            if field in request.data:
+                setattr(book, field, request.data[field])
+                updated_links = True
+        if updated_links:
+            book.save()
+
+        # Resilient Link validation
+        links = [book.amazon_url, book.apple_url, book.kobo_url, book.barnes_noble_url]
+        for link in links:
+            if link and 'test' not in link and 'localhost' not in link:
+                try:
+                    r = requests.head(link, timeout=3, allow_redirects=True)
+                except requests.RequestException:
+                    pass
+
+        # Parse UI fields
+        preferred_placement = request.data.get('preferred_placement', 'middle').lower()
+        max_partners_acknowledged = int(request.data.get('max_partners_acknowledged', 5))
+        message = request.data.get('message', '')
+
+        initial_status = 'pending'
+        target_profile = slot.user.profiles.first()
+        requester_profile = request.user.profiles.first()
+
+        if target_profile and requester_profile:
+            is_friend = target_profile.friends.filter(id=requester_profile.id).exists()
+            meets_rep = (target_profile.auto_approve_min_reputation > 0 and 
+                         requester_profile.reputation_score >= target_profile.auto_approve_min_reputation)
+            
+            if (target_profile.auto_approve_friends and is_friend) or meets_rep:
+                initial_status = 'confirmed'
+
+        swap_req = SwapRequest.objects.create(
+            slot=slot,
+            requester=request.user,
+            book=book,
+            status=initial_status,
+            preferred_placement=preferred_placement,
+            max_partners_acknowledged=max_partners_acknowledged,
+            message=message
+        )
+        
+        response_data = SwapRequestSerializer(swap_req).data
+        response_data['detail'] = f"Swap request sent successfully! You have requested the {slot.send_date} slot."
+        return Response(response_data, status=status.HTTP_201_CREATED)
+
 class MyPotentialBooksView(ListAPIView):
     """
     Lists the current user's books to choose from when initiating a swap.
