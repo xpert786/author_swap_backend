@@ -43,6 +43,7 @@ urlpatterns = [
     # --- Figma UI Specific APIs ---
     path('slots/explore/', SlotExploreView.as_view(), name='slots-explore'),
     path('slots/<int:pk>/details/', SlotDetailsView.as_view(), name='slots-details'),
+    path('slots/<int:slot_id>/request/', SwapRequestListView.as_view(), name='slot-request-create'),
     path('swaps/<int:pk>/arrangement/', SwapArrangementView.as_view(), name='swaps-arrangement'),
     
     path('author-reputation/', AuthorReputationView.as_view(), name='author-reputation'),

@@ -428,11 +428,37 @@ class SwapRequestListView(APIView):
     """
     permission_classes = [IsAuthenticated]
 
-    def post(self, request):
-        serializer = SwapRequestSerializer(data=request.data)
+    def post(self, request, slot_id=None):
+        data = request.data.copy()
+        
+        # Handle slot_id from URL keyword argument
+        if slot_id and 'slot' not in data:
+            data['slot'] = slot_id
+            
+        # Handle cases where 'slot_id' is passed in body instead of 'slot'
+        if 'slot_id' in data and 'slot' not in data:
+            data['slot'] = data['slot_id']
+            
+        # Handle cases where slot ID is passed as a query param
+        if 'slot' not in data and request.query_params.get('slot_id'):
+            data['slot'] = request.query_params.get('slot_id')
+
+        serializer = SwapRequestSerializer(data=data)
         if serializer.is_valid():
             slot = serializer.validated_data['slot']
             book = serializer.validated_data.get('book')
+            
+            # If no book provided, auto-pick the requester's primary promotional book
+            if not book:
+                primary_book = Book.objects.filter(user=request.user, is_primary_promo=True).first()
+                if primary_book:
+                    book = primary_book
+                else:
+                    # Fallback to the latest active book
+                    book = Book.objects.filter(user=request.user, is_active=True).order_by('-created_at').first()
+            
+            if not book:
+                return Response({"detail": "You must have at least one active book to request a swap."}, status=status.HTTP_400_BAD_REQUEST)
 
             if slot.user == request.user:
                 return Response({"detail": "You cannot request a swap for your own slot."}, status=status.HTTP_400_BAD_REQUEST)
@@ -465,11 +491,11 @@ class SwapRequestListView(APIView):
                 if (target_profile.auto_approve_friends and is_friend) or meets_rep:
                     initial_status = 'confirmed'
 
-            swap_req = serializer.save(requester=request.user, status=initial_status)
+            swap_req = serializer.save(requester=request.user, status=initial_status, book=book)
             return Response(SwapRequestSerializer(swap_req).data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-    def get(self, request):
+    def get(self, request, *args, **kwargs):
         # type param: 'sent' or 'received'
         request_type = request.query_params.get('type', 'sent')
         if request_type == 'sent':
