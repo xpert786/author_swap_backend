@@ -27,7 +27,7 @@ class CreateNewsletterSlotView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        serializer = NewsletterSlotSerializer(data=request.data)
+        serializer = NewsletterSlotSerializer(data=request.data, context={'request': request})
         if serializer.is_valid():
             serializer.save(user=request.user)
             return Response({
@@ -39,7 +39,7 @@ class CreateNewsletterSlotView(APIView):
 
     def get(self, request):
         slots = request.user.newsletter_slots.all()
-        serializer = NewsletterSlotSerializer(slots, many=True)
+        serializer = NewsletterSlotSerializer(slots, many=True, context={'request': request})
         return Response({
             "message": "Newsletter slots retrieved successfully.",
             "data": serializer.data
