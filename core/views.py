@@ -496,52 +496,22 @@ class SwapRequestListView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def get(self, request, *args, **kwargs):
-        # type param: 'sent' or 'received'
-        request_type = request.query_params.get('type', 'sent')
-        if request_type == 'sent':
-            requests = SwapRequest.objects.filter(requester=request.user)
-        else:
-            requests = SwapRequest.objects.filter(slot__user=request.user)
-        
-        serializer = SwapRequestSerializer(requests, many=True)
+        # Requested to return data from NewsletterSlot table instead of SwapRequest
+        slots = NewsletterSlot.objects.all().order_by('-created_at')
+        serializer = SlotExploreSerializer(slots, many=True)
         return Response(serializer.data)
 
-class SwapRequestDetailView(RetrieveUpdateDestroyAPIView):
+class SwapRequestDetailView(RetrieveAPIView):
     """
-    Handles retrieving, updating (Accept/Reject), and deleting swap requests.
+    Requested to fetch from NewsletterSlot table.
+    Endpoint: /api/swap-requests/<id>/
     """
-    queryset = SwapRequest.objects.all()
-    serializer_class = SwapRequestSerializer
+    queryset = NewsletterSlot.objects.all()
+    serializer_class = SlotDetailsSerializer
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return SwapRequest.objects.all()
-
-    def get(self, request, *args, **kwargs):
-        pk = kwargs.get('pk')
-        print(f"DEBUG: SwapRequestDetailView triggered for PK: {pk}")
-        try:
-            swap = SwapRequest.objects.get(pk=pk)
-            serializer = self.get_serializer(swap)
-            response = Response(serializer.data)
-            response['X-Debug-Status'] = 'Found-By-Me'
-            return response
-        except SwapRequest.DoesNotExist:
-            all_ids = list(SwapRequest.objects.values_list('id', flat=True)[:20])
-            print(f"DEBUG: PK {pk} not found. Available: {all_ids}")
-            return Response({
-                "detail": f"ID {pk} not found in DB.",
-                "available_ids": all_ids,
-            }, status=status.HTTP_404_NOT_FOUND)
-
-    def perform_update(self, serializer):
-        instance = self.get_object()
-        new_status = serializer.validated_data.get('status')
-        
-        if new_status in ['confirmed', 'rejected'] and instance.slot.user != self.request.user:
-            return Response({"detail": "Only the slot owner can confirm or reject a swap request."}, status=status.HTTP_403_FORBIDDEN)
-        
-        serializer.save()
+        return NewsletterSlot.objects.all()
 
 class MyPotentialBooksView(ListAPIView):
     """
