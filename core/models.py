@@ -111,6 +111,14 @@ class Profile(models.Model):
     
     created_at = models.DateTimeField(auto_now_add=True)
 
+    @property
+    def swaps_completed(self):
+        from .models import SwapRequest
+        # Count confirmed/verified requests where this profile's user is either the requester or the slot owner
+        sent_confirmed = self.user.sent_swap_requests.filter(status__in=['confirmed', 'verified']).count()
+        received_confirmed = SwapRequest.objects.filter(slot__user=self.user, status__in=['confirmed', 'verified']).count()
+        return sent_confirmed + received_confirmed
+
     # Auto-Approve logic and friends
     auto_approve_friends = models.BooleanField(default=False)
     auto_approve_min_reputation = models.FloatField(default=0.0)
@@ -175,16 +183,6 @@ class CampaignAnalytic(models.Model):
     click_rate = models.FloatField()
     type = models.CharField(max_length=50, default='Recent') # Recent, Top Performing, Swap Campaigns
     
-    def __str__(self):
-        return self.name
-    @property
-    def swaps_completed(self):
-        from .models import SwapRequest
-        # Count confirmed/verified requests where this profile's user is either the requester or the slot owner
-        sent_confirmed = self.user.sent_swap_requests.filter(status__in=['confirmed', 'verified']).count()
-        received_confirmed = SwapRequest.objects.filter(slot__user=self.user, status__in=['confirmed', 'verified']).count()
-        return sent_confirmed + received_confirmed
-
     def __str__(self):
         return self.name
 
