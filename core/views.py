@@ -9,6 +9,7 @@ from .serializers import (
     SubscriptionTierSerializer, UserSubscriptionSerializer, SubscriberVerificationSerializer,
     SubscriberGrowthSerializer, CampaignAnalyticSerializer
 )
+from .ui_serializers import SlotExploreSerializer, SlotDetailsSerializer
 from authentication.constants import GENRE_SUBGENRE_MAPPING
 
 

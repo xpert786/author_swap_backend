@@ -10,7 +10,7 @@ def test_detail():
     token = resp.json()['access']
     headers = {"Authorization": f"Bearer {token}"}
     
-    request_url = "http://127.0.0.1:8000/authorswap/api/swap-requests/18/"
+    request_url = "http://127.0.0.1:8000/authorswap/api/swap-requests/23/"
     print(f"Fetching {request_url}...")
     resp = requests.get(request_url, headers=headers)
     
