@@ -137,9 +137,22 @@ class NewsletterSlotSerializer(serializers.ModelSerializer):
         return data
 
     def to_internal_value(self, data):
-        data = data.copy()
+        data = data.copy() if hasattr(data, 'copy') else data
+        
+        # 1. Normalize visibility (e.g., "Public" -> "public")
+        if 'visibility' in data and isinstance(data['visibility'], str):
+            data['visibility'] = data['visibility'].lower().replace(' ', '_').replace('-', '_')
+
+        # 2. Handle send_time (convert empty string to None so it honors blank=True)
+        if 'send_time' in data:
+            val = data.get('send_time')
+            if isinstance(val, str) and (not val.strip() or val.lower() == 'null' or val == '--:-- --'):
+                data['send_time'] = None
+            
+        # 3. Flatten subgenres if they are sent as a list
         if 'subgenres' in data and isinstance(data['subgenres'], list):
             data['subgenres'] = ",".join(data['subgenres'])
+            
         return super().to_internal_value(data)
 
     def to_representation(self, instance):
