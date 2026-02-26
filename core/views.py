@@ -36,20 +36,41 @@ class CreateNewsletterSlotView(APIView):
     def post(self, request):
         serializer = NewsletterSlotSerializer(data=request.data, context={'request': request})
         if serializer.is_valid():
-            serializer.save(user=request.user)
+            # Auto-populate audience_size from verification if it exists
+            audience_size = 0
+            verification = getattr(request.user, 'verification', None)
+            if verification:
+                audience_size = verification.audience_size
+
+            serializer.save(user=request.user, audience_size=audience_size)
             return Response({
                 "message": "Newsletter slot created successfully.",
                 "data": serializer.data
             }, status=status.HTTP_201_CREATED)
         
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
     def get(self, request):
         slots = request.user.newsletter_slots.all()
         serializer = NewsletterSlotSerializer(slots, many=True, context={'request': request})
         return Response({
             "message": "Newsletter slots retrieved successfully.",
             "data": serializer.data
+        }, status=status.HTTP_200_OK)
+
+class AudienceSizeView(APIView):
+    """
+    GET /api/audience-size/
+    Returns the user's verified audience size from MailerLite.
+    Used by the frontend to pre-fill or display audience size when creating slots.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        verification, _ = SubscriberVerification.objects.get_or_create(user=request.user)
+        return Response({
+            "audience_size": verification.audience_size,
+            "is_connected": verification.is_connected_mailerlite,
+            "last_verified": verification.last_verified_at
         }, status=status.HTTP_200_OK)
 
 

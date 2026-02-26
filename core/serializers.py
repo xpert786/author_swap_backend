@@ -80,9 +80,9 @@ class NewsletterSlotSerializer(serializers.ModelSerializer):
     class Meta:
         model = NewsletterSlot
         fields = '__all__'
-        read_only_fields = ['user']
+        read_only_fields = ['user', 'audience_size']
         extra_kwargs = {
-            'audience_size': {'required': True},
+            'send_time': {'required': False, 'allow_null': True},
             'max_partners': {'required': True},
             'visibility': {'required': True},
         }

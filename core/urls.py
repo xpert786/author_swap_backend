@@ -8,7 +8,7 @@ from .views import (
     SwapManagementListView, AcceptSwapView, RejectSwapView, RestoreSwapView,
     SwapHistoryDetailView, TrackMySwapView, CancelSwapView, AuthorReputationView,
     SubscriberVerificationView, ConnectMailerLiteView, SubscriberAnalyticsView,
-    RequestSwapPlacementView, AuthorDashboardView
+    RequestSwapPlacementView, AuthorDashboardView, AudienceSizeView
 )
 from .ui_views import SlotExploreView, SlotDetailsView, SwapArrangementView
 
@@ -55,4 +55,5 @@ urlpatterns = [
     
     # --- Author Dashboard ---
     path('dashboard/', AuthorDashboardView.as_view(), name='author-dashboard'),
+    path('audience-size/', AudienceSizeView.as_view(), name='audience-size'),
 ]
