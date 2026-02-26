@@ -161,7 +161,7 @@ class BookSerializer(serializers.ModelSerializer):
         required=False,
         default=list
     )
-    rating = serializers.FloatField(required=False, allow_null=True, default=0.0)
+    rating = serializers.FloatField(allow_null=True, default=0.0)
 
     class Meta:
         model = Book
