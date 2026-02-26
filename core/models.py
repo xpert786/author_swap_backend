@@ -149,6 +149,7 @@ class UserSubscription(models.Model):
 class SubscriberVerification(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='verification')
     is_connected_mailerlite = models.BooleanField(default=False)
+    mailerlite_api_key = models.CharField(max_length=255, blank=True, null=True, help_text="Stored for syncing purposes. Should be encrypted in production.")
     mailerlite_api_key_last_4 = models.CharField(max_length=4, blank=True)
     last_verified_at = models.DateTimeField(null=True, blank=True)
     audience_size = models.PositiveIntegerField(default=0)

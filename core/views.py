@@ -1051,8 +1051,13 @@ class ConnectMailerLiteView(APIView):
         
         profile = request.user.profiles.first()
         if profile:
-            audience = sync_profile_audience(profile, api_key=api_key)
+            # We must save the key FIRST so sync_profile_audience can use it correctly
             verification, _ = SubscriberVerification.objects.get_or_create(user=request.user)
+            verification.mailerlite_api_key = api_key
+            verification.save()
+
+            audience = sync_profile_audience(profile, api_key=api_key)
+            
             verification.is_connected_mailerlite = True
             verification.mailerlite_api_key_last_4 = api_key[-4:]
             verification.audience_size = audience
@@ -1070,8 +1075,9 @@ class ConnectMailerLiteView(APIView):
             
             return Response({
                 "message": "Successfully connected to MailerLite", 
-                "audience_size": audience
-            })
+                "audience_size": audience,
+                "status": "active" if audience > 0 else "empty"
+            }, status=status.HTTP_200_OK)
         
         return Response({"error": "Profile not found"}, status=status.HTTP_404_NOT_FOUND)
 
