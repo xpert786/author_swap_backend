@@ -26,43 +26,55 @@ def _get_headers(api_key=None):
 # A.  Audience Size Sync
 # ---------------------------------------------------------------------------
 
-def get_audience_size(email: str, api_key: str = None) -> int:
+def get_audience_size(email: str = None, api_key: str = None) -> int:
     """
-    Fetches the total active subscriber count for the entire account.
+    Fetches the total active subscriber count for the account.
+    Detects if the key is for New MailerLite (Bearer) or Classic (X-MailerLite-ApiKey).
     """
-    headers = _get_headers(api_key)
-    if not headers.get("Authorization"):
+    if not api_key:
+        api_key = getattr(settings, 'MAILERLITE_API_KEY', None)
+    
+    if not api_key:
         return 0
-        
+
+    # New tokens start with "mlsn."
+    is_new_api = api_key.startswith("mlsn.")
+    
     try:
-        # We fetch subscribers with limit=1 just to get the 'meta' field which has the total
-        url = f"{API_URL}/subscribers"
-        params = {"limit": 1, "status": "active"}
-        logger.info(f"Fetching MailerLite audience from {url} with params {params}")
-        
-        response = requests.get(
-            url,
-            headers=headers,
-            params=params,
-            timeout=10
-        )
-        logger.info(f"MailerLite response status: {response.status_code}")
-        
-        if response.status_code == 200:
-            data = response.json()
-            total = data.get('meta', {}).get('total', 0)
-            logger.info(f"MailerLite audience found: {total}")
-            return total
-        
-        logger.warning(f"MailerLite API error: {response.text}")
-        
-        # Fallback to general stats if subscribers endpoint fails
-        stats_resp = requests.get(f"{API_URL}/stats", headers=headers, timeout=10)
-        if stats_resp.status_code == 200:
-            total = stats_resp.json().get('total_subscribers', 0)
-            logger.info(f"MailerLite fallback stats total: {total}")
-            return total
-            
+        if is_new_api:
+            # --- New MailerLite API ---
+            url = f"{API_URL}/subscribers"
+            headers = {
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "Authorization": f"Bearer {api_key}"
+            }
+            # We fetch subscribers to get the 'meta' field which has the total.
+            # Removing status filter temporarily to see if we get a non-zero count.
+            response = requests.get(url, headers=headers, params={"limit": 1}, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                total = data.get('meta', {}).get('total', 0)
+                logger.info(f"New MailerLite API: Total Found {total}")
+                return total
+            logger.warning(f"New MailerLite API failed ({response.status_code}): {response.text}")
+        else:
+            # --- Classic MailerLite API ---
+            url = "https://api.mailerlite.com/api/v2/stats"
+            headers = {
+                "Content-Type": "application/json",
+                "X-MailerLite-ApiKey": api_key
+            }
+            response = requests.get(url, headers=headers, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                # Classic stats returns 'subscribed' count
+                total = data.get('subscribed', 0)
+                logger.info(f"Classic MailerLite API: Found {total} subscribers.")
+                return total
+            logger.warning(f"Classic MailerLite API failed ({response.status_code}): {response.text}")
+
+        # Final Fallback: If specific subscriber count is 0, check if we can get ANYTHING
         return 0
     except Exception as e:
         logger.error(f"MailerLite get_audience_size failed: {e}")
