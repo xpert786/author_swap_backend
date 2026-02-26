@@ -7,7 +7,7 @@ User = get_user_model()
 class NewsletterSlot(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='newsletter_slots')
     send_date = models.DateField()
-    send_time = models.TimeField(required=False, blank=True, null=True)  
+    send_time = models.TimeField( blank=True, null=True)  
     status = models.CharField(max_length=20, choices=[('available', 'Available'), ('booked', 'Booked'),('pending', 'Pending')], default='available')    
     @property
     def time_period(self):
