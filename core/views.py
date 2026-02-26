@@ -47,13 +47,33 @@ class CreateNewsletterSlotView(APIView):
                 "message": "Newsletter slot created successfully.",
                 "data": serializer.data
             }, status=status.HTTP_201_CREATED)
-        
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
     def get(self, request):
         slots = request.user.newsletter_slots.all()
-        serializer = NewsletterSlotSerializer(slots, many=True, context={'request': request})
+
+        # Apply filters from query params
+        genre = request.query_params.get('genre', None)
+        visibility = request.query_params.get('visibility', None)
+        slot_status = request.query_params.get('status', None)
+        month = request.query_params.get('month', None)
+        year = request.query_params.get('year', None)
+
+        if genre and genre.lower() != 'all':
+            slots = slots.filter(preferred_genre=genre)
+        if visibility and visibility.lower() not in ('all', 'all visibility'):
+            slots = slots.filter(visibility=visibility.lower().replace(' ', '_'))
+        if slot_status and slot_status.lower() not in ('all', 'all status'):
+            slots = slots.filter(status=slot_status.lower())
+        if month:
+            slots = slots.filter(send_date__month=int(month))
+        if year:
+            slots = slots.filter(send_date__year=int(year))
+
+        serializer = NewsletterSlotSerializer(slots.order_by('send_date', 'send_time'), many=True, context={'request': request})
         return Response({
             "message": "Newsletter slots retrieved successfully.",
+            "count": slots.count(),
             "data": serializer.data
         }, status=status.HTTP_200_OK)
 
@@ -247,34 +267,71 @@ class NewsletterStatsView(APIView):
         month = int(request.query_params.get('month', datetime.now().month))
         year = int(request.query_params.get('year', datetime.now().year))
 
-        # --- 1. TOP STATS CARDS DATA ---
+        # Get filter params
+        genre_filter = request.query_params.get('genre', None)
+        visibility_filter = request.query_params.get('visibility', None)
+        status_filter = request.query_params.get('status', None)
+
+        # --- Base queryset with filters ---
         all_slots = NewsletterSlot.objects.filter(user=user)
+        if genre_filter and genre_filter.lower() != 'all':
+            all_slots = all_slots.filter(preferred_genre=genre_filter)
+        if visibility_filter and visibility_filter.lower() not in ('all', 'all visibility'):
+            all_slots = all_slots.filter(visibility=visibility_filter.lower().replace(' ', '_'))
+        if status_filter and status_filter.lower() not in ('all', 'all status'):
+            all_slots = all_slots.filter(status=status_filter.lower())
+
+        # --- 1. TOP STATS CARDS DATA (filtered) ---
         stats = {
             "total": all_slots.count(),
             "published_slots": all_slots.filter(visibility='public').count(),
-            "pending_swaps": SwapRequest.objects.filter(slot__user=user, status='pending').count(),
-            "confirmed_swaps": SwapRequest.objects.filter(slot__user=user, status='confirmed').count(),
-            "verified_sent": SwapRequest.objects.filter(slot__user=user, status='verified').count()
+            "pending_swaps": SwapRequest.objects.filter(
+                slot__in=all_slots, status='pending'
+            ).count(),
+            "confirmed_swaps": SwapRequest.objects.filter(
+                slot__in=all_slots, status='confirmed'
+            ).count(),
+            "verified_sent": SwapRequest.objects.filter(
+                slot__in=all_slots, status='verified'
+            ).count()
         }
 
-        # --- 2. CALENDAR DATA ---
+        # --- 2. CALENDAR DATA (filtered) ---
         calendar_data = []
         num_days = calendar.monthrange(year, month)[1]
 
-        # Use 'swap_requests' instead of 'swaps'
-        slots_in_month = NewsletterSlot.objects.filter(
-            user=user, 
+        slots_in_month = all_slots.filter(
             send_date__year=year, 
             send_date__month=month
-        ).values('send_date', 'visibility').annotate(
+        ).values('send_date', 'visibility', 'status').annotate(
             total=Count('id'),
             pending=Count('swap_requests', filter=Q(swap_requests__status='pending')),
             confirmed=Count('swap_requests', filter=Q(swap_requests__status='confirmed')),
             verified=Count('swap_requests', filter=Q(swap_requests__status='verified'))
         )
 
-        # Map the DB results by date for easy lookup
-        date_map = {s['send_date']: s for s in slots_in_month}
+        # Build lookup: one date can have multiple slots, so aggregate
+        date_map = {}
+        for s in slots_in_month:
+            d = s['send_date']
+            if d not in date_map:
+                date_map[d] = {
+                    'total': 0, 'pending': 0, 'confirmed': 0, 'verified': 0,
+                    'has_public': False, 'has_available': False, 'has_booked': False, 'has_pending_slot': False,
+                    'slots': []
+                }
+            date_map[d]['total'] += s['total']
+            date_map[d]['pending'] += s['pending']
+            date_map[d]['confirmed'] += s['confirmed']
+            date_map[d]['verified'] += s['verified']
+            if s.get('visibility') == 'public':
+                date_map[d]['has_public'] = True
+            if s.get('status') == 'available':
+                date_map[d]['has_available'] = True
+            elif s.get('status') == 'booked':
+                date_map[d]['has_booked'] = True
+            elif s.get('status') == 'pending':
+                date_map[d]['has_pending_slot'] = True
 
         for day in range(1, num_days + 1):
             current_date = date(year, month, day)
@@ -283,14 +340,26 @@ class NewsletterStatsView(APIView):
             calendar_data.append({
                 "date": current_date.isoformat(),
                 "day": day,
-                "has_published": day_stats.get('total', 0) > 0 and day_stats.get('visibility') == 'public',
+                "slot_count": day_stats.get('total', 0),
+                "has_slots": day_stats.get('total', 0) > 0,
+                "has_published": day_stats.get('has_public', False),
+                "has_available": day_stats.get('has_available', False),
+                "has_booked": day_stats.get('has_booked', False),
                 "has_confirmed": day_stats.get('confirmed', 0) > 0,
-                "has_pending": day_stats.get('pending', 0) > 0,
+                "has_pending": day_stats.get('pending', 0) > 0 or day_stats.get('has_pending_slot', False),
                 "has_verified": day_stats.get('verified', 0) > 0,
             })
 
+        # --- 3. Active filters echo (for frontend state) ---
+        active_filters = {
+            "genre": genre_filter or "all",
+            "visibility": visibility_filter or "all",
+            "status": status_filter or "all",
+        }
+
         return Response({
             "stats_cards": stats,
+            "active_filters": active_filters,
             "calendar": {
                 "month_name": calendar.month_name[month],
                 "year": year,
