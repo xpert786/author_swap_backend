@@ -1051,7 +1051,7 @@ class ConnectMailerLiteView(APIView):
         
         profile = request.user.profiles.first()
         if profile:
-            audience = sync_profile_audience(profile)
+            audience = sync_profile_audience(profile, api_key=api_key)
             verification, _ = SubscriberVerification.objects.get_or_create(user=request.user)
             verification.is_connected_mailerlite = True
             verification.mailerlite_api_key_last_4 = api_key[-4:]
