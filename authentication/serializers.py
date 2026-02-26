@@ -275,6 +275,12 @@ class UserProfileReviewSerializer(serializers.ModelSerializer):
             'collaboration_status', 'created_at', 'updated_at'
         ]
 
+    def to_representation(self, instance):
+        ret = super().to_representation(instance)
+        if ret.get('primary_genre') and isinstance(ret['primary_genre'], str):
+            ret['primary_genre'] = [g.strip() for g in ret['primary_genre'].split(',') if g.strip()]
+        return ret
+
 class EditPenNameSerializer(serializers.ModelSerializer):
     class Meta:
         model = UserProfile
