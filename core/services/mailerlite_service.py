@@ -19,14 +19,16 @@ except ImportError:
     _HAS_SDK = False
 
 
-def _get_client():
+def _get_client(api_key=None):
     """
     Returns a configured MailerLite API client.
-    Returns None if the SDK is unavailable or no API key is configured.
+    Prioritizes passed api_key, falls back to settings.MAILERLITE_API_KEY.
     """
-    api_key = getattr(settings, 'MAILERLITE_API_KEY', None)
+    if not api_key:
+        api_key = getattr(settings, 'MAILERLITE_API_KEY', None)
+        
     if not api_key or not _HAS_SDK:
-        logger.warning("MailerLite SDK not available or MAILERLITE_API_KEY not set.")
+        logger.warning("MailerLite SDK not available or API key not set.")
         return None
     return MailerLiteApi(api_key)
 
@@ -35,34 +37,40 @@ def _get_client():
 # A.  Audience Size Sync
 # ---------------------------------------------------------------------------
 
-def get_audience_size(email: str) -> int:
+def get_audience_size(email: str, api_key: str = None) -> int:
     """
-    Fetches the audience/subscriber count associated with *email* from
-    MailerLite.  Falls back to 0 when the service is unreachable.
+    Fetches the total active subscriber count for the entire account.
+    If api_key is provided, it uses that; otherwise falls back to system default.
     """
-    client = _get_client()
+    client = _get_client(api_key)
     if client is None:
         return 0
     try:
-        subscriber = client.subscribers.get(email)
-        data = subscriber or {}
-        # MailerLite stores custom fields; we look for 'audience_size' or use
-        # the subscriber count of the groups they belong to.
-        fields = data.get('fields', {})
-        return int(fields.get('audience_size', 0))
+        # Fetching subscribers with a limit of 1 to get the 'meta' object which contains the total
+        response = client.subscribers.get(limit=1, status='active')
+        if response and isinstance(response, dict):
+            # The 'meta' object contains the 'total' count
+            return response.get('meta', {}).get('total', 0)
+        
+        # Fallback: check account stats
+        stats = getattr(client, 'stats', None)
+        if stats:
+            account_stats = stats.get()
+            return account_stats.get('total_subscribers', 0)
+            
+        return 0
     except Exception as e:
-        logger.error(f"MailerLite get_audience_size failed for {email}: {e}")
+        logger.error(f"MailerLite get_audience_size failed: {e}")
         return 0
 
 
-def sync_profile_audience(profile) -> int:
+def sync_profile_audience(profile, api_key: str = None) -> int:
     """
-    Convenience wrapper: given a Profile model instance, pull the latest
-    audience size from MailerLite and persist it on the related
-    NewsletterSlot(s) and SubscriberVerification.
+    Convenience wrapper: pull the latest audience size from MailerLite.
+    If api_key is provided, it uses that for validation.
     """
     email = profile.email or profile.user.email
-    audience = get_audience_size(email)
+    audience = get_audience_size(email, api_key=api_key)
     
     from core.models import SubscriberVerification, NewsletterSlot
     
