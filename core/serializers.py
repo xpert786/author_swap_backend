@@ -198,23 +198,51 @@ class BookSerializer(serializers.ModelSerializer):
         if hasattr(data, 'copy'):
             data = data.copy()
         
-        # 1. Handle Rating (more aggressive: catch empty or malformed strings)
+        # 1. Handle Rating (if empty or non-numeric, just remove it so it falls back to default=0.0)
         if 'rating' in data:
             val = data.get('rating')
-            if isinstance(val, str) and not val.strip():
-                data['rating'] = None
-            elif val == "":
-                data['rating'] = None
+            if val is None or (isinstance(val, str) and not val.strip()):
+                if hasattr(data, 'pop'):
+                    data.pop('rating', None)
+                else:
+                    del data['rating']
             
-        # 2. Handle Subgenres (cleanup if it's already a list, or convert from string)
+        # 2. Handle Subgenres (QueryDict getlist vs dict get)
         if 'subgenres' in data:
-            val = data.get('subgenres')
-            # If it's a comma separated string
-            if isinstance(val, str):
-                data['subgenres'] = [s.strip() for s in val.split(',') if s.strip()]
-            # If it's a list with junk like nulls/empty strings
-            elif isinstance(val, list):
-                data['subgenres'] = [s for s in val if isinstance(s, str) and s.strip()]
+            raw_subs = []
+            # If it's a QueryDict (form-data), we must use getlist to get all items
+            if hasattr(data, 'getlist'):
+                raw_subs_list = data.getlist('subgenres')
+                if len(raw_subs_list) == 1 and isinstance(raw_subs_list[0], str) and ',' in raw_subs_list[0]:
+                    raw_subs = [s.strip() for s in raw_subs_list[0].split(',') if s.strip()]
+                else:
+                    raw_subs = [s.strip() for s in raw_subs_list if isinstance(s, str) and s.strip()]
+            else:
+                # Standard dict (JSON)
+                val = data.get('subgenres')
+                if isinstance(val, str):
+                    raw_subs = [s.strip() for s in val.split(',') if s.strip()]
+                elif isinstance(val, list):
+                    raw_subs = [s.strip() for s in val if isinstance(s, str) and s.strip()]
+                elif isinstance(val, dict):
+                    # Some JS libraries send arrays as dicts like {"0": "v1", "1": "v2"}
+                    raw_subs = []
+                    for k in sorted(val.keys(), key=lambda x: int(x) if str(x).isdigit() else x):
+                        item = val[k]
+                        if isinstance(item, str) and item.strip():
+                            raw_subs.append(item.strip())
+            
+            # Update the data with the cleaned list, or Remove it if it's empty so it falls back to default=list
+            if raw_subs:
+                if hasattr(data, 'setlist'):
+                    data.setlist('subgenres', raw_subs)
+                else:
+                    data['subgenres'] = raw_subs
+            else:
+                if hasattr(data, 'pop'):
+                    data.pop('subgenres', None)
+                else:
+                    del data['subgenres']
 
         validated_data = super().to_internal_value(data)
         
