@@ -75,7 +75,7 @@ class NewsletterSlotSerializer(serializers.ModelSerializer):
         allow_empty=True
     )
     time_period = serializers.ReadOnlyField()
-    formatted_time = serializers.SerializerMethodField()
+    formatted_time = serializers.SerializerMethodField(required=False)
     formatted_date = serializers.SerializerMethodField()
     class Meta:
         model = NewsletterSlot
@@ -158,6 +158,7 @@ class BookSerializer(serializers.ModelSerializer):
     # Allows the frontend to send an array of subgenres
     subgenres = serializers.ListField(child=serializers.CharField(), required=True)
     rating = serializers.FloatField(required=False, allow_null=True, default=0.0)
+
     class Meta:
         model = Book
         fields = '__all__'
@@ -168,7 +169,6 @@ class BookSerializer(serializers.ModelSerializer):
             'apple_url': {'required': True},
             'kobo_url': {'required': True},
             'barnes_noble_url': {'required': True},
-            'rating': {'required': False},
             'availability': {'required': True},
         }
 
@@ -190,11 +190,30 @@ class BookSerializer(serializers.ModelSerializer):
         return data
 
     def to_internal_value(self, data):
-        data = data.copy()  # Make a mutable copy
-        # Flatten the list back to a string for the DB CharField
-        if 'subgenres' in data and isinstance(data['subgenres'], list):
-            data['subgenres'] = ",".join(data['subgenres'])
-        return super().to_internal_value(data)
+        # Create a mutable copy if it's a QueryDict (from multipart/form-data)
+        if hasattr(data, 'copy'):
+            data = data.copy()
+        
+        # 1. Handle Rating (convert empty string to None so FloatField handles it)
+        if 'rating' in data and data['rating'] == "":
+            data['rating'] = None
+            
+        # 2. Handle Subgenres (if sent as a comma-separated string, convert to list)
+        if 'subgenres' in data and isinstance(data['subgenres'], str):
+            if ',' in data['subgenres']:
+                data.update({'subgenres': [s.strip() for s in data['subgenres'].split(',') if s.strip()]})
+            elif data['subgenres'].strip():
+                data.update({'subgenres': [data['subgenres'].strip()]})
+            else:
+                 data.update({'subgenres': []})
+
+        validated_data = super().to_internal_value(data)
+        
+        # Flatten the list back to a string for the DB CharField (models.py expects a string)
+        if 'subgenres' in validated_data and isinstance(validated_data['subgenres'], list):
+            validated_data['subgenres'] = ",".join(validated_data['subgenres'])
+            
+        return validated_data
 
     def to_representation(self, instance):
         repr = super().to_representation(instance)

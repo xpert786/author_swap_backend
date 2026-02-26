@@ -7,7 +7,7 @@ User = get_user_model()
 class NewsletterSlot(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='newsletter_slots')
     send_date = models.DateField()
-    send_time = models.TimeField()  
+    send_time = models.TimeField(required=False, blank=True, null=True)  
     status = models.CharField(max_length=20, choices=[('available', 'Available'), ('booked', 'Booked'),('pending', 'Pending')], default='available')    
     @property
     def time_period(self):
@@ -55,7 +55,7 @@ class Book(models.Model):
     title = models.CharField(max_length=255)
     primary_genre = models.CharField(max_length=50, choices=PRIMARY_GENRE_CHOICES)
     subgenres = models.CharField(max_length=300, help_text="Comma-separated keys")
-    rating = models.FloatField(default=0.0)
+    rating = models.FloatField(default=0.0, null=True, blank=True)
     price_tier = models.CharField(max_length=50, blank=True, null=True, choices=[('discount', 'Discount'), ('free', 'Free'), ('standard', 'Standard'), ('0.99', '$0.99')], default='standard')
     book_cover = models.ImageField(upload_to='book_covers/', blank=True, null=True)
     availability = models.CharField(max_length=50,choices=[('all','All'),('wide','Wide'),('kindle_unlimited','Kindle Unlimited')],default='all')
