@@ -19,11 +19,18 @@ Authors provide their API Key in the settings page to establish a connection.
       "api_key": "ml_api_xxxxxxxxxxxxxxxx"
     }
     ```
-*   **Backend Logic**: 
-    1.  Validates the key with MailerLite.
-    2.  Fetches the total subscriber count.
-    3.  Updates the author's `Profile` and `SubscriberVerification` models.
-    4.  Updates all the author's public `NewsletterSlot`s with the verified audience size.
+* ### 1. Audience Verification Logic
+AuthorSwap uses a **Universal Sync** approach:
+- **Automatic Version Detection**: Detects if the provided key is for "New MailerLite" (starts with `mlsn.`) or "Classic".
+- **Account-Wide Totals**: Instead of searching for a specific subscriber, it fetches the **Total Active Subscriber Count** for the entire account.
+- **SDK-less Reliability**: Uses raw `requests` calls to avoid environmental dependency issues (like missing SDKs).
+
+**Logic Flow:**
+1. User provides API Key.
+2. Backend validates key by making a lightweight request to `/subscribers` (New) or `/stats` (Classic).
+3. `audience_size` is extracted from the API response's metadata.
+    4.  Updates the author's `Profile` and `SubscriberVerification` models.
+    5.  Updates all the author's public `NewsletterSlot`s with the verified audience size.
 
 ---
 
@@ -49,7 +56,14 @@ Used to pull real-time open rates, click rates, and recent campaign data.
 ---
 
 ## 3. Swap Life Cycle & Groups
-The backend automatically moves authors into different MailerLite groups based on the status of their swap requests. You should create these groups in your MailerLite dashboard and set their IDs in the backend `settings.py`.
+The backend automatically moves authors into different MailerLite groups based on the status of their swap requests. You should create these groups in your MailerLite dashboard.
+
+### Verified Flow
+1. **Connect**: `POST /api/connect-mailerlite/` -> Returns `audience_size: 1`.
+2. **Sync**: `GET /api/subscriber-analytics/` -> Populates dashboard graphs.
+3. **Notify**: `POST /api/slots/<id>/request/` -> Triggers MailerLite automation.
+
+![Integration Success](/home/shivam/.gemini/antigravity/brain/c0de99f9-ff02-4946-9ccb-44ddb22d8d69/media__1772079849434.png)
 
 ### A. New Swap Request (Sent)
 *   **Triggers**: When `POST /api/slots/<id>/request/` is called.
