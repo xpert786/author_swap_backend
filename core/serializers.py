@@ -157,7 +157,7 @@ class NewsletterSlotSerializer(serializers.ModelSerializer):
 class BookSerializer(serializers.ModelSerializer):
     # Allows the frontend to send an array of subgenres
     subgenres = serializers.ListField(child=serializers.CharField(), required=True)
-
+    rating = serializers.FloatField(required=False, allow_null=True, default=0.0)
     class Meta:
         model = Book
         fields = '__all__'
@@ -168,7 +168,7 @@ class BookSerializer(serializers.ModelSerializer):
             'apple_url': {'required': True},
             'kobo_url': {'required': True},
             'barnes_noble_url': {'required': True},
-            'rating': {'required': True},
+            'rating': {'required': False},
             'availability': {'required': True},
         }
 
