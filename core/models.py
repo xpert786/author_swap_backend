@@ -7,7 +7,7 @@ User = get_user_model()
 class NewsletterSlot(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='newsletter_slots')
     send_date = models.DateField()
-    send_time = models.TimeField( blank=True, null=True)  
+    send_time = models.TimeField(blank=True, null=True)  
     status = models.CharField(max_length=20, choices=[('available', 'Available'), ('booked', 'Booked'),('pending', 'Pending')], default='available')    
     @property
     def time_period(self):
@@ -20,7 +20,7 @@ class NewsletterSlot(models.Model):
             return "Evening"
         else:
             return "Night"
-    audience_size = models.PositiveIntegerField(default=0)
+    audience_size = models.PositiveIntegerField(default=0, blank=True, null=True)
     preferred_genre = models.CharField(max_length=50, choices=PRIMARY_GENRE_CHOICES)
     
     # Store subgenres as a comma-separated string

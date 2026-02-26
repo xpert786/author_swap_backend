@@ -176,22 +176,18 @@ class BookSerializer(serializers.ModelSerializer):
             'availability': {'required': True},
         }
 
-    def validate(self, data):
-        genre = data.get('primary_genre')
-        subs = data.get('subgenres', [])
-
-        if genre and subs:
-            # 1. Fetch the allowed subgenres for the selected category
+    def validate_subgenres(self, value):
+        # Value is already a list due to ListField
+        genre = self.initial_data.get('primary_genre')
+        if genre and value:
             allowed_tuples = GENRE_SUBGENRE_MAPPING.get(genre, [])
             allowed_keys = [item[0] for item in allowed_tuples]
-
-            # 2. Enforce the match
-            for s in subs:
+            for s in value:
                 if s not in allowed_keys:
-                    raise serializers.ValidationError({
-                        "subgenres": f"'{s}' is not a valid subgenre for the {genre} category."
-                    })
-        return data
+                    raise serializers.ValidationError(
+                        f"'{s}' is not a valid subgenre for the {genre} category."
+                    )
+        return value
 
     def to_internal_value(self, data):
         # Create a mutable copy if it's a QueryDict (from multipart/form-data)
@@ -210,7 +206,6 @@ class BookSerializer(serializers.ModelSerializer):
         # 2. Handle Subgenres (QueryDict getlist vs dict get)
         if 'subgenres' in data:
             raw_subs = []
-            # If it's a QueryDict (form-data), we must use getlist to get all items
             if hasattr(data, 'getlist'):
                 raw_subs_list = data.getlist('subgenres')
                 if len(raw_subs_list) == 1 and isinstance(raw_subs_list[0], str) and ',' in raw_subs_list[0]:
@@ -218,21 +213,18 @@ class BookSerializer(serializers.ModelSerializer):
                 else:
                     raw_subs = [s.strip() for s in raw_subs_list if isinstance(s, str) and s.strip()]
             else:
-                # Standard dict (JSON)
                 val = data.get('subgenres')
                 if isinstance(val, str):
                     raw_subs = [s.strip() for s in val.split(',') if s.strip()]
                 elif isinstance(val, list):
                     raw_subs = [s.strip() for s in val if isinstance(s, str) and s.strip()]
                 elif isinstance(val, dict):
-                    # Some JS libraries send arrays as dicts like {"0": "v1", "1": "v2"}
                     raw_subs = []
                     for k in sorted(val.keys(), key=lambda x: int(x) if str(x).isdigit() else x):
                         item = val[k]
                         if isinstance(item, str) and item.strip():
                             raw_subs.append(item.strip())
             
-            # Update the data with the cleaned list, or Remove it if it's empty so it falls back to default=list
             if raw_subs:
                 if hasattr(data, 'setlist'):
                     data.setlist('subgenres', raw_subs)
@@ -246,7 +238,7 @@ class BookSerializer(serializers.ModelSerializer):
 
         validated_data = super().to_internal_value(data)
         
-        # Flatten the list back to a string for the DB CharField (models.py expects a string)
+        # Flatten the list back to a string for the DB CharField
         if 'subgenres' in validated_data and isinstance(validated_data['subgenres'], list):
             validated_data['subgenres'] = ",".join(validated_data['subgenres'])
             
