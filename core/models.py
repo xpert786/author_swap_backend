@@ -57,7 +57,7 @@ class Book(models.Model):
     subgenres = models.CharField(max_length=300, help_text="Comma-separated keys")
     rating = models.FloatField(default=0.0)
     price_tier = models.CharField(max_length=50, blank=True, null=True, choices=[('discount', 'Discount'), ('free', 'Free'), ('standard', 'Standard'), ('0.99', '$0.99')], default='standard')
-    book_cover = models.ImageField(upload_to='book_covers/')
+    book_cover = models.ImageField(upload_to='book_covers/', blank=True, null=True)
     availability = models.CharField(max_length=50,choices=[('all','All'),('wide','Wide'),('kindle_unlimited','Kindle Unlimited')],default='all')
     publish_date = models.DateField()
     description = models.TextField()    
