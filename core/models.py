@@ -11,6 +11,8 @@ class NewsletterSlot(models.Model):
     status = models.CharField(max_length=20, choices=[('available', 'Available'), ('booked', 'Booked'),('pending', 'Pending')], default='available')    
     @property
     def time_period(self):
+        if not self.send_time:
+            return "Flexible"
         hour = self.send_time.hour
         if 0 <= hour < 12:
             return "Morning"    
