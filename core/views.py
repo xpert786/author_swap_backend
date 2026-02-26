@@ -1111,3 +1111,268 @@ class SubscriberAnalyticsView(APIView):
             # Link-level analysis is handled per-campaign or as a general summary here
             "link_level_ctr": [] # Placeholder for now as it depends on campaign selection in UI
         })
+
+
+# =====================================================================
+# AUTHOR DASHBOARD (Figma: "Author Dashboard" — main landing page)
+# =====================================================================
+
+class AuthorDashboardView(APIView):
+    """
+    GET /api/dashboard/
+    Returns all data needed for the Author Dashboard page:
+    - Stats cards (Books, Newsletter Slots, Completed Swaps, Reliability)
+    - Calendar (monthly view with slot/swap indicators)
+    - Recent Activity (notifications + swap events)
+    - Campaign Analytics (open rate, click rate, performance comparison)
+    Supports query params: ?month=2&year=2026&genre=romance
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        now = datetime.now()
+        month = int(request.query_params.get('month', now.month))
+        year = int(request.query_params.get('year', now.year))
+        genre_filter = request.query_params.get('genre', None)
+
+        # ─── 1. STATS CARDS ──────────────────────────────────────────
+        total_books = Book.objects.filter(user=user).count()
+        total_slots = NewsletterSlot.objects.filter(user=user).count()
+
+        completed_swaps = SwapRequest.objects.filter(
+            Q(slot__user=user) | Q(requester=user),
+            status__in=['completed', 'verified']
+        ).count()
+
+        profile = user.profiles.first()
+        reliability_score = 0
+        if profile:
+            reliability_score = int(profile.send_reliability_percent) if profile.send_reliability_percent else 0
+
+        stats_cards = {
+            "book": total_books,
+            "newsletter_slots": total_slots,
+            "completed_swaps": completed_swaps,
+            "reliability": reliability_score,
+        }
+
+        # ─── 2. CALENDAR ─────────────────────────────────────────────
+        num_days = calendar.monthrange(year, month)[1]
+
+        slots_qs = NewsletterSlot.objects.filter(
+            user=user,
+            send_date__year=year,
+            send_date__month=month
+        )
+        if genre_filter:
+            slots_qs = slots_qs.filter(preferred_genre=genre_filter)
+
+        slots_in_month = slots_qs.values('send_date').annotate(
+            total_slots=Count('id'),
+            pending_swaps=Count('swap_requests', filter=Q(swap_requests__status='pending')),
+            confirmed_swaps=Count('swap_requests', filter=Q(swap_requests__status__in=['confirmed', 'verified'])),
+            scheduled_swaps=Count('swap_requests', filter=Q(swap_requests__status='scheduled')),
+        )
+
+        date_map = {s['send_date']: s for s in slots_in_month}
+
+        calendar_days = []
+        today = date.today()
+        for day in range(1, num_days + 1):
+            current_date = date(year, month, day)
+            day_stats = date_map.get(current_date, {})
+
+            calendar_days.append({
+                "date": current_date.isoformat(),
+                "day": day,
+                "is_today": current_date == today,
+                "has_slots": day_stats.get('total_slots', 0) > 0,
+                "has_pending": day_stats.get('pending_swaps', 0) > 0,
+                "has_confirmed": day_stats.get('confirmed_swaps', 0) > 0,
+                "has_scheduled": day_stats.get('scheduled_swaps', 0) > 0,
+                "slot_count": day_stats.get('total_slots', 0),
+            })
+
+        calendar_data = {
+            "month_name": calendar.month_name[month],
+            "year": year,
+            "month": month,
+            "days": calendar_days,
+        }
+
+        # ─── 3. RECENT ACTIVITY ──────────────────────────────────────
+        # Combine notifications and swap events into a unified feed
+        recent_activities = []
+
+        # Fetch recent notifications
+        notifications = Notification.objects.filter(
+            recipient=user
+        ).order_by('-created_at')[:10]
+
+        for notif in notifications:
+            time_diff = now - notif.created_at.replace(tzinfo=None)
+            if time_diff.days == 0:
+                time_ago = "Today"
+            elif time_diff.days == 1:
+                time_ago = "1 day ago"
+            else:
+                time_ago = f"{time_diff.days} days ago"
+
+            recent_activities.append({
+                "id": notif.id,
+                "type": "notification",
+                "title": notif.title,
+                "message": notif.message,
+                "badge": notif.badge,
+                "time_ago": time_ago,
+                "action_url": notif.action_url,
+                "is_read": notif.is_read,
+                "created_at": notif.created_at.isoformat(),
+            })
+
+        # If not enough notifications, also pull recent swap events
+        if len(recent_activities) < 6:
+            recent_swaps = SwapRequest.objects.filter(
+                Q(slot__user=user) | Q(requester=user)
+            ).select_related('requester', 'slot', 'book').order_by('-created_at')[:6]
+
+            for swap in recent_swaps:
+                partner = swap.slot.user if swap.requester == user else swap.requester
+                partner_profile = partner.profiles.first()
+                partner_name = partner_profile.name if partner_profile else partner.username
+
+                status_messages = {
+                    'pending': f"Swap request pending with {partner_name}",
+                    'confirmed': f"Completed swap with {partner_name}",
+                    'sending': f"Sending swap with {partner_name}",
+                    'scheduled': f"Scheduled swap with {partner_name}",
+                    'completed': f"Completed swap with {partner_name}",
+                    'verified': f"Verified swap with {partner_name}",
+                    'rejected': f"Swap request declined by {partner_name}",
+                }
+
+                time_diff = now - swap.created_at.replace(tzinfo=None)
+                if time_diff.days == 0:
+                    time_ago = "Today"
+                elif time_diff.days == 1:
+                    time_ago = "1 day ago"
+                else:
+                    time_ago = f"{time_diff.days} days ago"
+
+                recent_activities.append({
+                    "id": f"swap_{swap.id}",
+                    "type": "swap_event",
+                    "title": status_messages.get(swap.status, f"Swap update with {partner_name}"),
+                    "message": swap.message or "",
+                    "badge": "SWAP",
+                    "time_ago": time_ago,
+                    "action_url": f"/dashboard/swaps/track/{swap.id}/",
+                    "is_read": True,
+                    "created_at": swap.created_at.isoformat(),
+                })
+
+        # Sort by created_at descending and limit to 6
+        recent_activities.sort(key=lambda x: x['created_at'], reverse=True)
+        recent_activities = recent_activities[:6]
+
+        # ─── 4. CAMPAIGN ANALYTICS ───────────────────────────────────
+        campaigns = CampaignAnalytic.objects.filter(user=user).order_by('-date')
+
+        # Calculate averages for the analytics cards
+        total_campaigns = campaigns.count()
+        if total_campaigns > 0:
+            from django.db.models import Avg
+            avg_stats = campaigns.aggregate(
+                avg_open_rate=Avg('open_rate'),
+                avg_click_rate=Avg('click_rate'),
+            )
+            avg_open_rate = round(avg_stats['avg_open_rate'] or 0, 1)
+            avg_click_rate = round(avg_stats['avg_click_rate'] or 0, 1)
+        else:
+            avg_open_rate = 0.0
+            avg_click_rate = 0.0
+
+        # Previous period comparison (last 30 days vs 30 days before that)
+        thirty_days_ago = today - timedelta(days=30)
+        sixty_days_ago = today - timedelta(days=60)
+
+        current_period = campaigns.filter(date__gte=thirty_days_ago)
+        previous_period = campaigns.filter(date__gte=sixty_days_ago, date__lt=thirty_days_ago)
+
+        current_avg_open = 0.0
+        current_avg_click = 0.0
+        if current_period.exists():
+            from django.db.models import Avg
+            current_stats = current_period.aggregate(
+                avg_open=Avg('open_rate'),
+                avg_click=Avg('click_rate'),
+            )
+            current_avg_open = round(current_stats['avg_open'] or 0, 1)
+            current_avg_click = round(current_stats['avg_click'] or 0, 1)
+
+        prev_avg_open = 0.0
+        prev_avg_click = 0.0
+        if previous_period.exists():
+            prev_stats = previous_period.aggregate(
+                avg_open=Avg('open_rate'),
+                avg_click=Avg('click_rate'),
+            )
+            prev_avg_open = round(prev_stats['avg_open'] or 0, 1)
+            prev_avg_click = round(prev_stats['avg_click'] or 0, 1)
+
+        open_rate_change = round(current_avg_open - prev_avg_open, 1)
+        click_rate_change = round(current_avg_click - prev_avg_click, 1)
+
+        campaign_analytics = {
+            "avg_open_rate": avg_open_rate,
+            "avg_click_rate": avg_click_rate,
+            "current_period": {
+                "open_rate": current_avg_open,
+                "click_rate": current_avg_click,
+            },
+            "previous_period": {
+                "open_rate": prev_avg_open,
+                "click_rate": prev_avg_click,
+            },
+            "open_rate_change": open_rate_change,
+            "click_rate_change": click_rate_change,
+            "improvement_label": f"+{open_rate_change}% improvement" if open_rate_change > 0 else f"{open_rate_change}% change",
+            "recent_campaigns": CampaignAnalyticSerializer(campaigns[:5], many=True).data,
+        }
+
+        # ─── 5. QUICK ACTIONS ────────────────────────────────────────
+        quick_actions = [
+            {"label": "Add New Book", "url": "/dashboard/books/add/", "icon": "book"},
+            {"label": "Add Newsletter Slot", "url": "/dashboard/newsletter-slot/add/", "icon": "calendar"},
+        ]
+
+        # ─── 6. USER INFO (Welcome Banner) ───────────────────────────
+        user_profile = None
+        try:
+            user_profile = user.profile  # from authentication.UserProfile
+        except Exception:
+            pass
+
+        pen_name = user_profile.pen_name if user_profile and user_profile.pen_name else user.username
+        profile_photo = None
+        if user_profile and user_profile.profile_photo:
+            profile_photo = request.build_absolute_uri(user_profile.profile_photo.url)
+        elif profile and profile.profile_picture:
+            profile_photo = request.build_absolute_uri(profile.profile_picture.url)
+
+        welcome = {
+            "name": pen_name,
+            "profile_photo": profile_photo,
+            "greeting": f"Welcome back, {pen_name}!",
+            "subtitle": "Here's what's happening with your swaps and books",
+        }
+
+        return Response({
+            "welcome": welcome,
+            "stats_cards": stats_cards,
+            "calendar": calendar_data,
+            "recent_activity": recent_activities,
+            "campaign_analytics": campaign_analytics,
+            "quick_actions": quick_actions,
+        })
