@@ -184,6 +184,29 @@ class AccountBasicsSerializer(serializers.ModelSerializer):
             "genre_preferences",
         ]
 
+    def to_internal_value(self, data):
+        """
+        Pre-process the incoming data.
+        When sending multipart/form-data, arrays might be sent as a single comma-separated string
+        (e.g., "romance,mystery_thriller" instead of ["romance", "mystery_thriller"]).
+        This normalizes them into lists so MultipleChoiceField and SlugRelatedField can process them properly.
+        """
+        # Create a mutable copy of the data if possible
+        mutable_data = data.copy() if hasattr(data, 'copy') else data
+
+        list_fields = ['primary_genre', 'genre_preferences', 'subgenres', 'audience_tags']
+        for field in list_fields:
+            if field in mutable_data:
+                val = mutable_data[field]
+                # If it's a single string with commas, split it into a list
+                if isinstance(val, str) and ',' in val:
+                    mutable_data.setlist(field, [v.strip() for v in val.split(',') if v.strip()]) if hasattr(mutable_data, 'setlist') else mutable_data.__setitem__(field, [v.strip() for v in val.split(',') if v.strip()])
+                elif isinstance(val, str):
+                    # If it's just a single string without commas, make it a list of one item
+                     mutable_data.setlist(field, [val]) if hasattr(mutable_data, 'setlist') else mutable_data.__setitem__(field, [val])
+
+        return super().to_internal_value(mutable_data)
+
     def validate_primary_genre(self, value):
         if value:
             return ",".join(value)
