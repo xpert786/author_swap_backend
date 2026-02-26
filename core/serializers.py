@@ -156,7 +156,11 @@ class NewsletterSlotSerializer(serializers.ModelSerializer):
 
 class BookSerializer(serializers.ModelSerializer):
     # Allows the frontend to send an array of subgenres
-    subgenres = serializers.ListField(child=serializers.CharField(), required=True)
+    subgenres = serializers.ListField(
+        child=serializers.CharField(allow_null=True, allow_blank=True, required=False),
+        required=False,
+        default=list
+    )
     rating = serializers.FloatField(required=False, allow_null=True, default=0.0)
 
     class Meta:
@@ -194,18 +198,23 @@ class BookSerializer(serializers.ModelSerializer):
         if hasattr(data, 'copy'):
             data = data.copy()
         
-        # 1. Handle Rating (convert empty string to None so FloatField handles it)
-        if 'rating' in data and data['rating'] == "":
-            data['rating'] = None
+        # 1. Handle Rating (more aggressive: catch empty or malformed strings)
+        if 'rating' in data:
+            val = data.get('rating')
+            if isinstance(val, str) and not val.strip():
+                data['rating'] = None
+            elif val == "":
+                data['rating'] = None
             
-        # 2. Handle Subgenres (if sent as a comma-separated string, convert to list)
-        if 'subgenres' in data and isinstance(data['subgenres'], str):
-            if ',' in data['subgenres']:
-                data.update({'subgenres': [s.strip() for s in data['subgenres'].split(',') if s.strip()]})
-            elif data['subgenres'].strip():
-                data.update({'subgenres': [data['subgenres'].strip()]})
-            else:
-                 data.update({'subgenres': []})
+        # 2. Handle Subgenres (cleanup if it's already a list, or convert from string)
+        if 'subgenres' in data:
+            val = data.get('subgenres')
+            # If it's a comma separated string
+            if isinstance(val, str):
+                data['subgenres'] = [s.strip() for s in val.split(',') if s.strip()]
+            # If it's a list with junk like nulls/empty strings
+            elif isinstance(val, list):
+                data['subgenres'] = [s for s in val if isinstance(s, str) and s.strip()]
 
         validated_data = super().to_internal_value(data)
         
