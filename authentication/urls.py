@@ -4,7 +4,7 @@ from .views import (
     LoginAPIView, SignupAPIView, ForgotPasswordAPIView, VerifyOTPAPIView, ResetPasswordAPIView,
     AccountBasicsAPIView, OnlinePresenceAPIView, UserProfileReviewAPIView,
     SubgenresByGenreAPIView, GenreChoicesAPIView, PrimaryGenreChoicesView,
-    AllSubgenresView, AudienceTagsView
+    AllSubgenresView, AudienceTagsView, EditPenNameAPIView
 )
 
 urlpatterns = [
@@ -22,4 +22,5 @@ urlpatterns = [
     path('primary-genres/', PrimaryGenreChoicesView.as_view(), name='primary-genres'),
     path('all-subgenres/', AllSubgenresView.as_view(), name='all-subgenres'),
     path('audience-tags/', AudienceTagsView.as_view(), name='audience-tags'),
+    path('edit-pen-name/', EditPenNameAPIView.as_view(), name='edit-pen-name'),
 ]       

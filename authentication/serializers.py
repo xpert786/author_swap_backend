@@ -149,6 +149,10 @@ class ResetPasswordSerializer(serializers.Serializer):
 
 
 class AccountBasicsSerializer(serializers.ModelSerializer):
+    primary_genre = serializers.MultipleChoiceField(
+        choices=PRIMARY_GENRE_CHOICES,
+        required=False
+    )
     subgenres = serializers.SlugRelatedField(
         many=True,
         slug_field='slug',
@@ -162,7 +166,7 @@ class AccountBasicsSerializer(serializers.ModelSerializer):
         required=False
     )
     # Temporary field for incoming genre selection if needed by frontend
-    genre_preferences = serializers.ChoiceField(
+    genre_preferences = serializers.MultipleChoiceField(
         choices=PRIMARY_GENRE_CHOICES,
         required=False,
         write_only=True
@@ -180,30 +184,49 @@ class AccountBasicsSerializer(serializers.ModelSerializer):
             "genre_preferences",
         ]
 
+    def validate_primary_genre(self, value):
+        if value:
+            return ",".join(value)
+        return ""
+
+    def validate_genre_preferences(self, value):
+        if value:
+            return ",".join(value)
+        return ""
+
     def validate_subgenres(self, value):
         if len(value) > 3:
             raise serializers.ValidationError("Maximum 3 subgenres allowed.")
         return value
 
     def validate(self, data):
-        primary_genre = data.get('primary_genre')
+        primary_genre_str = data.get('primary_genre')
         subgenres_list = data.get('subgenres', [])
 
-        if primary_genre and subgenres_list:
-            # Validate that subgenres belong to the selected primary genre
-            valid_subgenres = [s.slug for s in Subgenre.objects.filter(parent_genre=primary_genre)]
+        if primary_genre_str and subgenres_list:
+            # Validate that subgenres belong to the selected primary genres
+            primary_genres = [g.strip() for g in primary_genre_str.split(',') if g.strip()]
+            valid_subgenres = []
+            for pg in primary_genres:
+                valid_subgenres.extend([s.slug for s in Subgenre.objects.filter(parent_genre=pg)])
             
             for sub in subgenres_list:
                 if sub.slug not in valid_subgenres:
                     raise serializers.ValidationError({
-                        "subgenres": f"'{sub.name}' is not a valid subgenre for the selected category."
+                        "subgenres": f"'{sub.name}' is not a valid subgenre for the selected categories."
                     })
         return data
 
+    def to_representation(self, instance):
+        ret = super().to_representation(instance)
+        if ret.get('primary_genre') and isinstance(ret['primary_genre'], str):
+            ret['primary_genre'] = [g.strip() for g in ret['primary_genre'].split(',') if g.strip()]
+        return ret
+
 
 class OnlinePresenceSerializer(serializers.ModelSerializer):
-    website_url = serializers.URLField(required=True)
-    collaboration_status = serializers.ChoiceField(choices=COLLABORATION_STATUS, required=True)
+    website_url = serializers.URLField(required=False, allow_blank=True)
+    collaboration_status = serializers.ChoiceField(choices=COLLABORATION_STATUS, required=False)
 
     def validate_collaboration_status(self, value):
         """Normalize input: allow labels OR keys, and make case-insensitive"""
@@ -251,3 +274,8 @@ class UserProfileReviewSerializer(serializers.ModelSerializer):
             'website_url', 'facebook_url', 'instagram_url', 'tiktok_url', 
             'collaboration_status', 'created_at', 'updated_at'
         ]
+
+class EditPenNameSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = UserProfile
+        fields = ['pen_name']

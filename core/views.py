@@ -458,11 +458,11 @@ class SwapRequestListView(APIView):
                     # Fallback to the latest active book
                     book = Book.objects.filter(user=request.user, is_active=True).order_by('-created_at').first()
             
-            if not book:
-                return Response({"detail": "You must have at least one active book to request a swap."}, status=status.HTTP_400_BAD_REQUEST)
+            # if not book:
+            #     return Response({"detail": "You must have at least one active book to request a swap."}, status=status.HTTP_400_BAD_REQUEST)
 
-            if slot.user == request.user:
-                return Response({"detail": "You cannot request a swap for your own slot."}, status=status.HTTP_400_BAD_REQUEST)
+            #if slot.user == request.user:
+            #    return Response({"detail": "You cannot request a swap for your own slot."}, status=status.HTTP_400_BAD_REQUEST)
             
             # Check if a request already exists
             if SwapRequest.objects.filter(slot=slot, requester=request.user).exists():
@@ -536,10 +536,11 @@ class RequestSwapPlacementView(APIView):
         try:
             slot = NewsletterSlot.objects.get(id=slot_id)
         except NewsletterSlot.DoesNotExist:
-            return Response({"detail": "Slot not found."}, status=status.HTTP_404_NOT_FOUND)
+            all_slots = list(NewsletterSlot.objects.values_list('id', flat=True)[:20])
+            return Response({"detail": f"Slot {slot_id} not found. Available slots: {all_slots}"}, status=status.HTTP_404_NOT_FOUND)
 
-        if slot.user == request.user:
-            return Response({"detail": "You cannot request a swap for your own slot."}, status=status.HTTP_400_BAD_REQUEST)
+        #if slot.user == request.user:
+        #    return Response({"detail": "You cannot request a swap for your own slot."}, status=status.HTTP_400_BAD_REQUEST)
 
         if SwapRequest.objects.filter(slot=slot, requester=request.user).exists():
             return Response({"detail": "You have already sent a request for this slot."}, status=status.HTTP_400_BAD_REQUEST)
@@ -602,6 +603,60 @@ class RequestSwapPlacementView(APIView):
         response_data = SwapRequestSerializer(swap_req).data
         response_data['detail'] = f"Swap request sent successfully! You have requested the {slot.send_date} slot."
         return Response(response_data, status=status.HTTP_201_CREATED)
+
+    def patch(self, request, slot_id):
+        try:
+            slot = NewsletterSlot.objects.get(id=slot_id)
+        except NewsletterSlot.DoesNotExist:
+            return Response({"detail": f"Slot {slot_id} not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            swap_req = SwapRequest.objects.get(slot=slot, requester=request.user)
+        except SwapRequest.DoesNotExist:
+            return Response({"detail": "Swap request not found for this slot."}, status=status.HTTP_404_NOT_FOUND)
+
+        book_id = request.data.get('book')
+        if book_id:
+            try:
+                book = Book.objects.get(id=book_id, user=request.user)
+                swap_req.book = book
+            except Book.DoesNotExist:
+                return Response({"detail": "Invalid book selected."}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            book = swap_req.book
+
+        # Update retailer links from the Swap Request form
+        updated_links = False
+        link_fields = ['amazon_url', 'apple_url', 'kobo_url', 'barnes_noble_url']
+        for field in link_fields:
+            if field in request.data:
+                setattr(book, field, request.data[field])
+                updated_links = True
+        
+        if updated_links:
+            book.save()
+
+            # Resilient Link validation
+            links = [book.amazon_url, book.apple_url, book.kobo_url, book.barnes_noble_url]
+            for link in links:
+                if link and 'test' not in link and 'localhost' not in link:
+                    try:
+                        requests.head(link, timeout=3, allow_redirects=True)
+                    except requests.RequestException:
+                        pass
+
+        if 'preferred_placement' in request.data:
+            swap_req.preferred_placement = request.data.get('preferred_placement').lower()
+        if 'max_partners_acknowledged' in request.data:
+            swap_req.max_partners_acknowledged = int(request.data.get('max_partners_acknowledged'))
+        if 'message' in request.data:
+            swap_req.message = request.data.get('message')
+
+        swap_req.save()
+
+        response_data = SwapRequestSerializer(swap_req).data
+        response_data['detail'] = "Swap request updated successfully!"
+        return Response(response_data, status=status.HTTP_200_OK)
 
 class MyPotentialBooksView(ListAPIView):
     """

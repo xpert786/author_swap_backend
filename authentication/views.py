@@ -6,7 +6,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth import get_user_model
 from django.core.mail import send_mail
 from django.conf import settings
-from .serializers import LoginSerializer, SignupSerializer, ForgotPasswordSerializer, VerifyOTPSerializer, ResetPasswordSerializer, AccountBasicsSerializer, OnlinePresenceSerializer, UserProfileReviewSerializer
+from .serializers import LoginSerializer, SignupSerializer, ForgotPasswordSerializer, VerifyOTPSerializer, ResetPasswordSerializer, AccountBasicsSerializer, OnlinePresenceSerializer, UserProfileReviewSerializer, EditPenNameSerializer
 from .models import PasswordResetToken, UserProfile, PRIMARY_GENRE_CHOICES, GENRE_SUBGENRE_MAPPING, AUDIENCE_TAG_CHOICES
 
 User = get_user_model()
@@ -276,4 +276,22 @@ class AudienceTagsView(APIView):
             for val, label in AUDIENCE_TAG_CHOICES
         ]
         return Response(data, status=status.HTTP_200_OK)
+
+
+class EditPenNameAPIView(APIView):
+    """
+    API endpoint to quickly update just the pen_name of the authenticated user's profile.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request):
+        profile, created = UserProfile.objects.get_or_create(user=request.user)
+        serializer = EditPenNameSerializer(profile, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response({
+                'message': 'Pen name updated successfully.',
+                'data': serializer.data
+            }, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
