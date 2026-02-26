@@ -4,7 +4,7 @@ from .views import (
     LoginAPIView, SignupAPIView, ForgotPasswordAPIView, VerifyOTPAPIView, ResetPasswordAPIView,
     AccountBasicsAPIView, OnlinePresenceAPIView, UserProfileReviewAPIView,
     SubgenresByGenreAPIView, GenreChoicesAPIView, PrimaryGenreChoicesView,
-    AllSubgenresView, AudienceTagsView, EditPenNameAPIView
+    AllSubgenresView, AudienceTagsView, EditPenNameAPIView, GoogleOAuthView
 )
 
 urlpatterns = [
@@ -23,4 +23,5 @@ urlpatterns = [
     path('all-subgenres/', AllSubgenresView.as_view(), name='all-subgenres'),
     path('audience-tags/', AudienceTagsView.as_view(), name='audience-tags'),
     path('edit-pen-name/', EditPenNameAPIView.as_view(), name='edit-pen-name'),
+    path('google/', GoogleOAuthView.as_view(), name='google-oauth'),
 ]       
