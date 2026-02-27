@@ -1679,12 +1679,19 @@ class AuthorDashboardView(APIView):
         except Exception:
             pass
 
-        pen_name = user_profile.pen_name if user_profile and user_profile.pen_name else user.username
+        pen_name = None
+        if profile and profile.name:
+            pen_name = profile.name
+        elif user_profile and user_profile.pen_name:
+            pen_name = user_profile.pen_name
+        else:
+            pen_name = user.username
+            
         profile_photo = None
-        if user_profile and user_profile.profile_photo:
-            profile_photo = request.build_absolute_uri(user_profile.profile_photo.url)
-        elif profile and profile.profile_picture:
+        if profile and profile.profile_picture:
             profile_photo = request.build_absolute_uri(profile.profile_picture.url)
+        elif user_profile and user_profile.profile_photo:
+            profile_photo = request.build_absolute_uri(user_profile.profile_photo.url)
 
         welcome = {
             "name": pen_name,
