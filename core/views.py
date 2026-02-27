@@ -2296,30 +2296,33 @@ class SendMessageView(APIView):
 
         if recipient.id == user.id:
             return Response({"detail": "You cannot send a message to yourself."}, status=status.HTTP_400_BAD_REQUEST)
+        
+        content = request.data.get('content', '')
+        attachment = request.FILES.get('attachment')
+        
+        # If no text message, use the filename as the content
+        if not content and attachment:
+            content = attachment.name
+        elif not content and not attachment: # If neither content nor attachment, it's an invalid message
+            return Response({"detail": "Message content or an attachment is required."}, status=status.HTTP_400_BAD_REQUEST)
 
         msg = ChatMessage.objects.create(
             sender=user,
             recipient=recipient,
             content=content,
+            attachment=attachment,
+            is_file=True if attachment else False
         )
 
-        # Handle attachment
-        if request.FILES.get('attachment'):
-            msg.attachment = request.FILES['attachment']
-            msg.is_file = True
-            msg.save()
-
-        # Push real-time notification via WebSocket
+        # Create persistent notification and push real-time updates
         try:
             from channels.layers import get_channel_layer
             from asgiref.sync import async_to_sync
 
-            channel_layer = get_channel_layer()
             sender_profile = user.profiles.first()
             sender_name = sender_profile.name if sender_profile else user.username
-
-            # Create persistent notification
-            from core.models import Notification
+            
+            # Create persistent notification (Once)
             Notification.objects.create(
                 recipient=recipient,
                 title='New Message 💬',
@@ -2328,50 +2331,43 @@ class SendMessageView(APIView):
                 action_url=f"/communication?conv={user.id}"
             )
 
-            # Send to recipient's notification channel
-            async_to_sync(channel_layer.group_send)(
-                f'user_{recipient.id}_notifications',
-                {
-                    'type': 'send_notification',
-                    'notification': {
+            channel_layer = get_channel_layer()
+            if channel_layer:
+                # 1. Send to recipient's notification bell channel
+                async_to_sync(channel_layer.group_send)(
+                    f'user_{recipient.id}_notifications',
+                    {
+                        'type': 'send_notification',
+                        'notification': {
+                            'type': 'chat_message',
+                            'message_id': msg.id,
+                            'sender_id': user.id,
+                            'sender_name': sender_name,
+                            'title': 'New Message 💬',
+                            'message': f'You have a new message from {sender_name}',
+                            'content': msg.content,
+                            'is_file': msg.is_file,
+                            'attachment': request.build_absolute_uri(msg.attachment.url) if msg.attachment else None,
+                            'created_at': msg.created_at.isoformat(),
+                        }
+                    }
+                )
+
+                # 2. Send to dedicated chat room channel
+                async_to_sync(channel_layer.group_send)(
+                    f'chat_{min(user.id, recipient.id)}_{max(user.id, recipient.id)}',
+                    {
                         'type': 'chat_message',
-                        'message_id': msg.id,
+                        'message': msg.content,
+                        'is_file': msg.is_file,
+                        'attachment': request.build_absolute_uri(msg.attachment.url) if msg.attachment else None,
                         'sender_id': user.id,
                         'sender_name': sender_name,
-                        'title': 'New Message 💬',
-                        'message': f'You have a new message from {sender_name}',
-                        'content': content[:100],
                         'created_at': msg.created_at.isoformat(),
                     }
-                }
-            )
-
-            # Also send to the dedicated chat channel (if recipient is in the chat room)
-            async_to_sync(channel_layer.group_send)(
-                f'chat_{min(user.id, recipient.id)}_{max(user.id, recipient.id)}',
-                {
-                    'type': 'chat_message',
-                    'message': content, # Keep it simple for now or use the serializer field
-                    'sender_id': user.id,
-                    'created_at': msg.created_at.isoformat(),
-                }
-            )
-        except Exception:
-            pass  # WebSocket push is non-critical
-
-        # Create in-app notification
-        try:
-            sender_profile = user.profiles.first()
-            sender_name = sender_profile.name if sender_profile else user.username
-            Notification.objects.create(
-                recipient=recipient,
-                title=f"New message from {sender_name}",
-                message=content[:100],
-                badge='NEW',
-                action_url=f'/communication-tools/messages/{user.id}/',
-            )
-        except Exception:
+                )
+        except Exception as e:
+            print(f"Error in chat notifications: {e}")
             pass
 
-        serializer = ChatMessageSerializer(msg, context={'request': request})
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(ChatMessageSerializer(msg, context={'request': request}).data, status=status.HTTP_201_CREATED)
