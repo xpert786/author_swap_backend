@@ -1512,18 +1512,29 @@ class AuthorDashboardView(APIView):
         recent_activities = []
 
         # Fetch recent notifications
+        from django.utils import timezone
+        now_aware = timezone.now()
+        
         notifications = Notification.objects.filter(
             recipient=user
         ).order_by('-created_at')[:10]
 
         for notif in notifications:
-            time_diff = now - notif.created_at.replace(tzinfo=None)
-            if time_diff.days == 0:
-                time_ago = "Today"
-            elif time_diff.days == 1:
+            time_diff = now_aware - notif.created_at
+            days = time_diff.days
+            seconds = time_diff.seconds
+            
+            if days == 0:
+                if seconds < 3600:
+                    mins = max(1, seconds // 60)
+                    time_ago = f"{mins} min{'s' if mins != 1 else ''} ago"
+                else:
+                    hours = seconds // 3600
+                    time_ago = f"{hours} hour{'s' if hours != 1 else ''} ago"
+            elif days == 1:
                 time_ago = "1 day ago"
             else:
-                time_ago = f"{time_diff.days} days ago"
+                time_ago = f"{days} days ago"
 
             recent_activities.append({
                 "id": notif.id,
@@ -1558,13 +1569,21 @@ class AuthorDashboardView(APIView):
                     'rejected': f"Swap request declined by {partner_name}",
                 }
 
-                time_diff = now - swap.created_at.replace(tzinfo=None)
-                if time_diff.days == 0:
-                    time_ago = "Today"
-                elif time_diff.days == 1:
+                time_diff = now_aware - swap.created_at
+                days = time_diff.days
+                seconds = time_diff.seconds
+                
+                if days == 0:
+                    if seconds < 3600:
+                        mins = max(1, seconds // 60)
+                        time_ago = f"{mins} min{'s' if mins != 1 else ''} ago"
+                    else:
+                        hours = seconds // 3600
+                        time_ago = f"{hours} hour{'s' if hours != 1 else ''} ago"
+                elif days == 1:
                     time_ago = "1 day ago"
                 else:
-                    time_ago = f"{time_diff.days} days ago"
+                    time_ago = f"{days} days ago"
 
                 recent_activities.append({
                     "id": f"swap_{swap.id}",
