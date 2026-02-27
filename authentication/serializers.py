@@ -25,18 +25,24 @@ class LoginSerializer(serializers.Serializer):
             # Try to find user by email first
             try:
                 user_obj = User.objects.get(email__iexact=email)
-                # Authenticate using the username (since USERNAME_FIELD is username)
-                user = authenticate(
-                    request=self.context.get('request'),
-                    username=user_obj.username,
-                    password=password
-                )
             except User.DoesNotExist:
-                user = None
+                raise serializers.ValidationError(
+                    {"email": _("No account found with this email.")}, 
+                    code='authorization'
+                )
+
+            # Authenticate using the username (since USERNAME_FIELD is username)
+            user = authenticate(
+                request=self.context.get('request'),
+                username=user_obj.username,
+                password=password
+            )
 
             if not user:
-                msg = _('Unable to log in with provided credentials.')
-                raise serializers.ValidationError(msg, code='authorization')
+                raise serializers.ValidationError(
+                    {"password": _("Incorrect password.")}, 
+                    code='authorization'
+                )
         else:
             msg = _('Must include "email" and "password".')
             raise serializers.ValidationError(msg, code='authorization')
