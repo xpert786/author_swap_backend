@@ -170,8 +170,13 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     print(f"DEBUG: Failed to save message")
 
     async def chat_message(self, event):
-        print(f"DEBUG: Broadcasting message: {event.get('message', '')}")
-        # Build the payload, keeping all fields sent from the views
+        # Don't echo the message back to the sender.
+        # They already see it via the optimistic UI update.
+        # Only the recipient should receive this WebSocket push.
+        if str(event.get('sender_id')) == str(self.user_id):
+            return
+
+        print(f"DEBUG: Broadcasting message to recipient: {event.get('message', '')}")
         payload = {
             'type': 'chat_message', # Must match what CommunicationTools.jsx expects
             'message': event.get('message'),
