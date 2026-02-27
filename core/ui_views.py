@@ -20,11 +20,8 @@ class SlotExploreView(ListAPIView):
     search_fields = ['user__profiles__name', 'preferred_genre']
 
     def get_queryset(self):
-        # Exclude current user's slots to only see potential partners
-        return NewsletterSlot.objects.filter(
-            visibility='public',
-            status='available'
-        ).exclude(user=self.request.user).order_by('send_date')
+        # Showing all slots so you can get the data as requested
+        return NewsletterSlot.objects.all().order_by('send_date')
 
 class SlotDetailsView(RetrieveAPIView):
     """
@@ -35,10 +32,8 @@ class SlotDetailsView(RetrieveAPIView):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        # Allow viewing the user's own slots or any public available slot
-        return NewsletterSlot.objects.filter(
-            Q(user=self.request.user) | Q(visibility='public', status='available')
-        ).distinct()
+        # Allowing viewing of all slots for data retrieval
+        return NewsletterSlot.objects.all()
 
 class SwapArrangementView(RetrieveAPIView):
     """

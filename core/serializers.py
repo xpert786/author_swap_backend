@@ -1,7 +1,11 @@
 from rest_framework import serializers
 from .models import NewsletterSlot
 from authentication.models import GENRE_SUBGENRE_MAPPING
-from .models import Book, Profile, Notification, SwapRequest
+from .models import (
+    Book, Profile, Notification, SwapRequest, 
+    SubscriptionTier, UserSubscription, SubscriberVerification,
+    SubscriberGrowth, CampaignAnalytic
+)
 
 from django.utils import timezone
 from datetime import timedelta
@@ -71,14 +75,14 @@ class NewsletterSlotSerializer(serializers.ModelSerializer):
         allow_empty=True
     )
     time_period = serializers.ReadOnlyField()
-    formatted_time = serializers.SerializerMethodField()
+    formatted_time = serializers.SerializerMethodField(required=False)
     formatted_date = serializers.SerializerMethodField()
     class Meta:
         model = NewsletterSlot
         fields = '__all__'
-        read_only_fields = ['user']
+        read_only_fields = ['user', 'audience_size']
         extra_kwargs = {
-            'audience_size': {'required': True},
+            'send_time': {'required': False, 'allow_null': True},
             'max_partners': {'required': True},
             'visibility': {'required': True},
         }
@@ -95,30 +99,6 @@ class NewsletterSlotSerializer(serializers.ModelSerializer):
         genre = data.get('preferred_genre')
         subs = data.get('subgenres', [])
 
-        # ── Unique date + time check per user ──────────────────────────
-        send_date = data.get('send_date')
-        send_time = data.get('send_time')
-        request = self.context.get('request')
-
-        if send_date and send_time and request:
-            user = request.user
-            qs = NewsletterSlot.objects.filter(
-                user=user,
-                send_date=send_date,
-                send_time=send_time,
-            )
-            # If we are updating an existing slot, exclude it from the check
-            if self.instance:
-                qs = qs.exclude(pk=self.instance.pk)
-
-            if qs.exists():
-                raise serializers.ValidationError({
-                    "send_time": "You already have a newsletter slot scheduled on "
-                                 f"{send_date.strftime('%d-%m-%Y')} at "
-                                 f"{send_time.strftime('%I:%M %p')}. "
-                                 "Please choose a different date or time."
-                })
-
         # ── Subgenre validation ────────────────────────────────────────
         if genre and subs:
              allowed_sub_tuples = GENRE_SUBGENRE_MAPPING.get(genre, [])
@@ -133,9 +113,22 @@ class NewsletterSlotSerializer(serializers.ModelSerializer):
         return data
 
     def to_internal_value(self, data):
-        data = data.copy()
+        data = data.copy() if hasattr(data, 'copy') else data
+        
+        # 1. Normalize visibility (e.g., "Public" -> "public")
+        if 'visibility' in data and isinstance(data['visibility'], str):
+            data['visibility'] = data['visibility'].lower().replace(' ', '_').replace('-', '_')
+
+        # 2. Handle send_time (convert empty string to None so it honors blank=True)
+        if 'send_time' in data:
+            val = data.get('send_time')
+            if isinstance(val, str) and (not val.strip() or val.lower() == 'null' or val == '--:-- --'):
+                data['send_time'] = None
+            
+        # 3. Flatten subgenres if they are sent as a list
         if 'subgenres' in data and isinstance(data['subgenres'], list):
             data['subgenres'] = ",".join(data['subgenres'])
+            
         return super().to_internal_value(data)
 
     def to_representation(self, instance):
@@ -152,7 +145,12 @@ class NewsletterSlotSerializer(serializers.ModelSerializer):
 
 class BookSerializer(serializers.ModelSerializer):
     # Allows the frontend to send an array of subgenres
-    subgenres = serializers.ListField(child=serializers.CharField(), required=True)
+    subgenres = serializers.ListField(
+        child=serializers.CharField(allow_null=True, allow_blank=True, required=False),
+        required=False,
+        default=list
+    )
+    rating = serializers.FloatField(allow_null=True, default=0.0)
 
     class Meta:
         model = Book
@@ -164,33 +162,76 @@ class BookSerializer(serializers.ModelSerializer):
             'apple_url': {'required': True},
             'kobo_url': {'required': True},
             'barnes_noble_url': {'required': True},
-            'rating': {'required': True},
             'availability': {'required': True},
         }
 
-    def validate(self, data):
-        genre = data.get('primary_genre')
-        subs = data.get('subgenres', [])
-
-        if genre and subs:
-            # 1. Fetch the allowed subgenres for the selected category
+    def validate_subgenres(self, value):
+        # Value is already a list due to ListField
+        genre = self.initial_data.get('primary_genre')
+        if genre and value:
             allowed_tuples = GENRE_SUBGENRE_MAPPING.get(genre, [])
             allowed_keys = [item[0] for item in allowed_tuples]
-
-            # 2. Enforce the match
-            for s in subs:
+            for s in value:
                 if s not in allowed_keys:
-                    raise serializers.ValidationError({
-                        "subgenres": f"'{s}' is not a valid subgenre for the {genre} category."
-                    })
-        return data
+                    raise serializers.ValidationError(
+                        f"'{s}' is not a valid subgenre for the {genre} category."
+                    )
+        return value
 
     def to_internal_value(self, data):
-        data = data.copy()  # Make a mutable copy
+        # Create a mutable copy if it's a QueryDict (from multipart/form-data)
+        if hasattr(data, 'copy'):
+            data = data.copy()
+        
+        # 1. Handle Rating (if empty or non-numeric, just remove it so it falls back to default=0.0)
+        if 'rating' in data:
+            val = data.get('rating')
+            if val is None or (isinstance(val, str) and not val.strip()):
+                if hasattr(data, 'pop'):
+                    data.pop('rating', None)
+                else:
+                    del data['rating']
+            
+        # 2. Handle Subgenres (QueryDict getlist vs dict get)
+        if 'subgenres' in data:
+            raw_subs = []
+            if hasattr(data, 'getlist'):
+                raw_subs_list = data.getlist('subgenres')
+                if len(raw_subs_list) == 1 and isinstance(raw_subs_list[0], str) and ',' in raw_subs_list[0]:
+                    raw_subs = [s.strip() for s in raw_subs_list[0].split(',') if s.strip()]
+                else:
+                    raw_subs = [s.strip() for s in raw_subs_list if isinstance(s, str) and s.strip()]
+            else:
+                val = data.get('subgenres')
+                if isinstance(val, str):
+                    raw_subs = [s.strip() for s in val.split(',') if s.strip()]
+                elif isinstance(val, list):
+                    raw_subs = [s.strip() for s in val if isinstance(s, str) and s.strip()]
+                elif isinstance(val, dict):
+                    raw_subs = []
+                    for k in sorted(val.keys(), key=lambda x: int(x) if str(x).isdigit() else x):
+                        item = val[k]
+                        if isinstance(item, str) and item.strip():
+                            raw_subs.append(item.strip())
+            
+            if raw_subs:
+                if hasattr(data, 'setlist'):
+                    data.setlist('subgenres', raw_subs)
+                else:
+                    data['subgenres'] = raw_subs
+            else:
+                if hasattr(data, 'pop'):
+                    data.pop('subgenres', None)
+                else:
+                    del data['subgenres']
+
+        validated_data = super().to_internal_value(data)
+        
         # Flatten the list back to a string for the DB CharField
-        if 'subgenres' in data and isinstance(data['subgenres'], list):
-            data['subgenres'] = ",".join(data['subgenres'])
-        return super().to_internal_value(data)
+        if 'subgenres' in validated_data and isinstance(validated_data['subgenres'], list):
+            validated_data['subgenres'] = ",".join(validated_data['subgenres'])
+            
+        return validated_data
 
     def to_representation(self, instance):
         repr = super().to_representation(instance)
@@ -285,6 +326,7 @@ class SwapManagementSerializer(serializers.ModelSerializer):
     Serializer for the Swap Management page (Figma).
     Returns all data needed for each swap card.
     """
+    status = serializers.SerializerMethodField()
     # Author info (the person who SENT the request)
     author_name = serializers.SerializerMethodField()
     author_genre_label = serializers.SerializerMethodField()
@@ -315,18 +357,37 @@ class SwapManagementSerializer(serializers.ModelSerializer):
             'preferred_placement', 'max_partners_acknowledged',
         ]
 
+    def get_status(self, obj):
+        request = self.context.get('request')
+        # Show as 'sending' if the swap is pending and the current user is the requester
+        if request and obj.status == 'pending' and obj.requester_id == request.user.id:
+            return 'sending'
+        # Map legacy 'confirmed' status to 'completed' in the API output
+        if obj.status == 'confirmed':
+            return 'completed'
+        return obj.status
+
+    def get_partner_user(self, obj):
+        request = self.context.get('request')
+        if request and request.user.id == obj.requester_id:
+            return obj.slot.user
+        return obj.requester
+
     def get_author_name(self, obj):
-        profile = obj.requester.profiles.first()
-        return profile.name if profile else obj.requester.username
+        partner = self.get_partner_user(obj)
+        profile = partner.profiles.first()
+        return profile.name if profile else partner.username
 
     def get_author_genre_label(self, obj):
-        profile = obj.requester.profiles.first()
+        partner = self.get_partner_user(obj)
+        profile = partner.profiles.first()
         if profile:
             return f"{profile.get_primary_genre_display() if hasattr(profile, 'get_primary_genre_display') else profile.primary_genre}"
         return ""
 
     def get_profile_picture(self, obj):
-        profile = obj.requester.profiles.first()
+        partner = self.get_partner_user(obj)
+        profile = partner.profiles.first()
         if profile and profile.profile_picture:
             request = self.context.get('request')
             if request:
@@ -340,7 +401,8 @@ class SwapManagementSerializer(serializers.ModelSerializer):
         return f"{slot.audience_size:,}+" if slot else "0"
 
     def get_reliability_score(self, obj):
-        profile = obj.requester.profiles.first()
+        partner = self.get_partner_user(obj)
+        profile = partner.profiles.first()
         if profile:
             return f"{int(profile.send_reliability_percent)}%"
         return "0%"
@@ -518,7 +580,7 @@ class SwapHistoryDetailSerializer(serializers.ModelSerializer):
     def _get_partner(self, obj):
         """Determine the partner: if I own the slot, partner is the requester. Otherwise, partner is the slot owner."""
         request = self.context.get('request')
-        if request and obj.slot.user == request.user:
+        if request and obj.slot.user_id == request.user.id:
             return obj.requester
         return obj.slot.user
 
@@ -647,7 +709,7 @@ class TrackMySwapSerializer(serializers.ModelSerializer):
 
     def _get_partner(self, obj):
         request = self.context.get('request')
-        if request and obj.slot.user == request.user:
+        if request and obj.slot.user_id == request.user.id:
             return obj.requester
         return obj.slot.user
 
@@ -745,21 +807,269 @@ class TrackMySwapSerializer(serializers.ModelSerializer):
 from django.db.models import Q
 from django.contrib.auth import get_user_model
 User = get_user_model()
-from .models import ChatMessage
+from core.models import ChatMessage, SubscriptionTier, UserSubscription, SubscriberVerification, SubscriberGrowth, CampaignAnalytic, Email, Profile
 
-class ChatMessageSerializer(serializers.ModelSerializer):
-    sender_name = serializers.CharField(source='sender.username', read_only=True)
-    
+
+class SubscriptionTierSerializer(serializers.ModelSerializer):
     class Meta:
-        model = ChatMessage
-        fields = ['id', 'sender', 'sender_name', 'receiver', 'text', 'is_file', 'file', 'created_at']
+        model = SubscriptionTier
+        fields = '__all__'
+
+
+class UserSubscriptionSerializer(serializers.ModelSerializer):
+    tier_details = SubscriptionTierSerializer(source='tier', read_only=True)
+
+    class Meta:
+        model = UserSubscription
+        fields = '__all__'
+
+
+class SubscriberVerificationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SubscriberVerification
+        fields = '__all__'
+
+
+class AuthorReputationSerializer(serializers.ModelSerializer):
+    reputation_score = serializers.SerializerMethodField()
+    platform_ranking = serializers.SerializerMethodField()
+    reputation_badges = serializers.SerializerMethodField()
+    reputation_score_breakdown = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Profile
+        fields = [
+            'reputation_score',
+            'is_webhook_verified',
+            'platform_ranking',
+            'reputation_badges',
+            'reputation_score_breakdown',
+        ]
+
+    def get_reputation_score(self, obj):
+        return {
+            "score": int(obj.reputation_score),
+            "max": 100
+        }
+
+    def get_platform_ranking(self, obj):
+        return {
+            "rank": obj.platform_ranking_position,
+            "percentile": obj.platform_ranking_percentile
+        }
+
+    def get_reputation_badges(self, obj):
+        return [
+            {
+                "name": "Verified Sender",
+                "description": "Complete 10+ swaps with verification",
+                "status": "Earned"
+            },
+            {
+                "name": "100% Reliability",
+                "description": "Perfect send record for 30 days",
+                "status": "Active"
+            },
+            {
+                "name": "Top Swap Partner",
+                "description": "Top 10% of all authors in reliability",
+                "status": "Earned"
+            },
+            {
+                "name": "Fast Communicator",
+                "description": "Average response time under 2 hours",
+                "status": "Locked"
+            }
+        ]
+
+    def get_reputation_score_breakdown(self, obj):
+        return {
+            "confirmed_sends": {
+                "score": obj.confirmed_sends_score,
+                "max": 50,
+                "description": f"{int(obj.confirmed_sends_success_rate)}% success rate",
+                "points": f"+{obj.confirmed_sends_score} points"
+            },
+            "timeliness": {
+                "score": obj.timeliness_score,
+                "max": 30,
+                "description": f"{int(obj.timeliness_success_rate)} % success rate",
+                "points": f"+{obj.timeliness_score} points"
+            },
+            "missed_sends": {
+                "score": abs(obj.missed_sends_penalty),
+                "max": 30,
+                "description": f"{obj.missed_sends_count} missed sends",
+                "points": f"{obj.missed_sends_penalty} points"
+            },
+            "communication": {
+                "score": obj.communication_score,
+                "max": 30,
+                "description": f"{obj.avg_response_time_hours}h avg response",
+                "points": f"+{obj.communication_score} points"
+            }
+        }
+
+
+class SubscriberGrowthSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SubscriberGrowth
+        fields = '__all__'
+
+
+class CampaignAnalyticSerializer(serializers.ModelSerializer):
+    formatted_date = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CampaignAnalytic
+        fields = '__all__'
+
+    def get_formatted_date(self, obj):
+        return obj.date.strftime("%B %d, %Y")
+
+
+# =====================================================================
+# EMAIL / COMMUNICATION TOOLS
+# =====================================================================
+
+
+class EmailListSerializer(serializers.ModelSerializer):
+    """
+    Lightweight serializer for the email list view (inbox sidebar).
+    """
+    sender_name = serializers.SerializerMethodField()
+    sender_profile_picture = serializers.SerializerMethodField()
+    recipient_name = serializers.SerializerMethodField()
+    formatted_date = serializers.SerializerMethodField()
+    snippet = serializers.SerializerMethodField()
+    reply_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Email
+        fields = [
+            'id', 'subject', 'snippet', 'folder', 'is_read', 'is_starred', 'is_draft',
+            'sender_name', 'sender_profile_picture',
+            'recipient_name',
+            'formatted_date', 'sent_at', 'created_at',
+            'reply_count',
+        ]
+
+    def get_sender_name(self, obj):
+        profile = obj.sender.profiles.first()
+        return profile.name if profile else obj.sender.username
+
+    def get_sender_profile_picture(self, obj):
+        profile = obj.sender.profiles.first()
+        if profile and profile.profile_picture:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(profile.profile_picture.url)
+            return profile.profile_picture.url
+        return None
+
+    def get_recipient_name(self, obj):
+        profile = obj.recipient.profiles.first()
+        return profile.name if profile else obj.recipient.username
+
+    def get_formatted_date(self, obj):
+        from django.utils import timezone
+        now = timezone.now().date()
+        target = (obj.sent_at or obj.created_at).date()
+        if target == now:
+            return "Today"
+        elif (now - target).days == 1:
+            return "Yesterday"
+        return target.strftime("%m/%d/%Y")
+
+    def get_snippet(self, obj):
+        if obj.body:
+            return obj.body[:80] + ("..." if len(obj.body) > 80 else "")
+        return ""
+
+    def get_reply_count(self, obj):
+        return obj.replies.count()
+
+
+class EmailDetailSerializer(serializers.ModelSerializer):
+    """
+    Full serializer for reading a single email.
+    """
+    sender_name = serializers.SerializerMethodField()
+    sender_profile_picture = serializers.SerializerMethodField()
+    recipient_name = serializers.SerializerMethodField()
+    recipient_email = serializers.SerializerMethodField()
+    formatted_date = serializers.SerializerMethodField()
+    replies = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Email
+        fields = [
+            'id', 'subject', 'body', 'folder', 'is_read', 'is_starred', 'is_draft',
+            'sender_name', 'sender_profile_picture',
+            'recipient_name', 'recipient_email',
+            'attachment',
+            'formatted_date', 'sent_at', 'created_at',
+            'parent_email', 'replies',
+        ]
+
+    def get_sender_name(self, obj):
+        profile = obj.sender.profiles.first()
+        return profile.name if profile else obj.sender.username
+
+    def get_sender_profile_picture(self, obj):
+        profile = obj.sender.profiles.first()
+        if profile and profile.profile_picture:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(profile.profile_picture.url)
+            return profile.profile_picture.url
+        return None
+
+    def get_recipient_name(self, obj):
+        profile = obj.recipient.profiles.first()
+        return profile.name if profile else obj.recipient.username
+
+    def get_recipient_email(self, obj):
+        return obj.recipient.email
+
+    def get_formatted_date(self, obj):
+        dt = obj.sent_at or obj.created_at
+        return dt.strftime("%B %d, %Y at %I:%M %p")
+
+    def get_replies(self, obj):
+        reply_qs = obj.replies.all().order_by('created_at')
+        return EmailListSerializer(reply_qs, many=True, context=self.context).data
+
+
+class ComposeEmailSerializer(serializers.Serializer):
+    """
+    Serializer for composing/sending a new email.
+    Accepts recipient by user ID or username.
+    """
+    recipient_id = serializers.IntegerField(required=False)
+    recipient_username = serializers.CharField(required=False)
+    subject = serializers.CharField(max_length=255)
+    body = serializers.CharField()
+    is_draft = serializers.BooleanField(default=False)
+    parent_email_id = serializers.IntegerField(required=False, allow_null=True)
+
+    def validate(self, data):
+        if not data.get('recipient_id') and not data.get('recipient_username'):
+            raise serializers.ValidationError("Either 'recipient_id' or 'recipient_username' is required.")
+        return data
+
+
+# =====================================================================
+# CHAT / MESSAGING
+# =====================================================================
+from core.models import ChatMessage
+
 
 class ConversationPartnerSerializer(serializers.ModelSerializer):
     name = serializers.SerializerMethodField()
     avatar = serializers.SerializerMethodField()
     last_message = serializers.SerializerMethodField()
     time = serializers.SerializerMethodField()
-
     swap_status = serializers.SerializerMethodField()
 
     class Meta:
@@ -799,11 +1109,11 @@ class ConversationPartnerSerializer(serializers.ModelSerializer):
             return None
         
         last_msg = ChatMessage.objects.filter(
-            (Q(sender=request.user) & Q(receiver=obj)) |
-            (Q(sender=obj) & Q(receiver=request.user))
+            (Q(sender=request.user) & Q(recipient=obj)) |
+            (Q(sender=obj) & Q(recipient=request.user))
         ).order_by('-created_at').first()
         
-        return last_msg.text if last_msg else "No messages yet"
+        return last_msg.content if last_msg else "No messages yet"
 
     def get_time(self, obj):
         request = self.context.get('request')
@@ -811,8 +1121,8 @@ class ConversationPartnerSerializer(serializers.ModelSerializer):
             return None
         
         last_msg = ChatMessage.objects.filter(
-            (Q(sender=request.user) & Q(receiver=obj)) |
-            (Q(sender=obj) & Q(receiver=request.user))
+            (Q(sender=request.user) & Q(recipient=obj)) |
+            (Q(sender=obj) & Q(recipient=request.user))
         ).order_by('-created_at').first()
         
         if last_msg:
@@ -823,3 +1133,61 @@ class ConversationPartnerSerializer(serializers.ModelSerializer):
                 return last_msg.created_at.strftime("%I:%M %p")
             return target.strftime("%d %b")
         return ""
+
+
+class ChatMessageSerializer(serializers.ModelSerializer):
+    """
+    Serializer for individual chat messages.
+    """
+    sender_name = serializers.SerializerMethodField()
+    sender_profile_picture = serializers.SerializerMethodField()
+    formatted_time = serializers.SerializerMethodField()
+    is_mine = serializers.SerializerMethodField()
+    text = serializers.CharField(source='content', read_only=True)
+
+    class Meta:
+        model = ChatMessage
+        fields = [
+            'id', 'sender', 'content', 'text', 'attachment', 'is_read', 'is_file',
+            'sender_name', 'sender_profile_picture',
+            'formatted_time', 'is_mine',
+            'created_at',
+        ]
+
+    def get_sender_name(self, obj):
+        profile = obj.sender.profiles.first()
+        return profile.name if profile else obj.sender.username
+
+    def get_sender_profile_picture(self, obj):
+        profile = obj.sender.profiles.first()
+        if profile and profile.profile_picture:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(profile.profile_picture.url)
+            return profile.profile_picture.url
+        return None
+
+    def get_formatted_time(self, obj):
+        return obj.created_at.strftime("%I:%M %p")
+
+    def get_is_mine(self, obj):
+        request = self.context.get('request')
+        if request:
+            return obj.sender_id == request.user.id
+        return False
+
+
+class ConversationListSerializer(serializers.Serializer):
+    """
+    Serializer for the conversation sidebar.
+    Each item = one author the user has chatted with.
+    """
+    user_id = serializers.IntegerField()
+    username = serializers.CharField()
+    name = serializers.CharField()
+    profile_picture = serializers.CharField(allow_null=True)
+    location = serializers.CharField(allow_null=True)
+    last_message = serializers.CharField()
+    last_message_time = serializers.DateTimeField()
+    formatted_time = serializers.CharField()
+    unread_count = serializers.IntegerField()

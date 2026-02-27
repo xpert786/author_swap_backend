@@ -7,10 +7,12 @@ User = get_user_model()
 class NewsletterSlot(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='newsletter_slots')
     send_date = models.DateField()
-    send_time = models.TimeField()  
+    send_time = models.TimeField(blank=True, null=True)  
     status = models.CharField(max_length=20, choices=[('available', 'Available'), ('booked', 'Booked'),('pending', 'Pending')], default='available')    
     @property
     def time_period(self):
+        if not self.send_time:
+            return "Flexible"
         hour = self.send_time.hour
         if 0 <= hour < 12:
             return "Morning"    
@@ -20,7 +22,7 @@ class NewsletterSlot(models.Model):
             return "Evening"
         else:
             return "Night"
-    audience_size = models.PositiveIntegerField(default=0)
+    audience_size = models.PositiveIntegerField(default=0, blank=True, null=True)
     preferred_genre = models.CharField(max_length=50, choices=PRIMARY_GENRE_CHOICES)
     
     # Store subgenres as a comma-separated string
@@ -55,9 +57,9 @@ class Book(models.Model):
     title = models.CharField(max_length=255)
     primary_genre = models.CharField(max_length=50, choices=PRIMARY_GENRE_CHOICES)
     subgenres = models.CharField(max_length=300, help_text="Comma-separated keys")
-    rating = models.FloatField(default=0.0)
-    price_tier = models.CharField(max_length=50, blank=True, null=True, choices=[('discounted', 'Discounted'), ('free', 'Free'), ('standard', 'Standard'), ('0.99', '$0.99')], default='standard')
-    book_cover = models.ImageField(upload_to='book_covers/')
+    rating = models.FloatField(default=0.0, null=True, blank=True)
+    price_tier = models.CharField(max_length=50, blank=True, null=True, choices=[('discount', 'Discount'), ('free', 'Free'), ('standard', 'Standard'), ('0.99', '$0.99')], default='standard')
+    book_cover = models.ImageField(upload_to='book_covers/', blank=True, null=True)
     availability = models.CharField(max_length=50,choices=[('all','All'),('wide','Wide'),('kindle_unlimited','Kindle Unlimited')],default='all')
     publish_date = models.DateField()
     description = models.TextField()    
@@ -86,7 +88,7 @@ class Profile(models.Model):
     tiktok_url = models.URLField(blank=True, null=True)
     facebook_url = models.URLField(blank=True, null=True)
     website = models.URLField(blank=True, null=True)
-    reputation_score = models.FloatField(default=5.0) # 0 to 5
+    reputation_score = models.FloatField(default=0.0) # 0 to 100 based on mockup
     
     # Analytics Breakdown (Mockup Details)
     avg_open_rate = models.FloatField(default=0.0)
@@ -100,12 +102,17 @@ class Profile(models.Model):
     missed_sends_penalty = models.IntegerField(default=0)
     communication_score = models.PositiveIntegerField(default=0)
     
+    # Advanced Reputation fields (Author Reputation System)
+    is_webhook_verified = models.BooleanField(default=True)
+    platform_ranking_position = models.PositiveIntegerField(default=0)
+    platform_ranking_percentile = models.PositiveIntegerField(default=0)
+    confirmed_sends_success_rate = models.FloatField(default=0.0)
+    timeliness_success_rate = models.FloatField(default=0.0)
+    missed_sends_count = models.PositiveIntegerField(default=0)
+    avg_response_time_hours = models.FloatField(default=0.0)
+    
     created_at = models.DateTimeField(auto_now_add=True)
 
-    # Auto-Approve logic and friends
-    auto_approve_friends = models.BooleanField(default=False)
-    auto_approve_min_reputation = models.FloatField(default=0.0)
-    friends = models.ManyToManyField('self', blank=True, symmetrical=True)
     @property
     def swaps_completed(self):
         from .models import SwapRequest
@@ -114,6 +121,71 @@ class Profile(models.Model):
         received_confirmed = SwapRequest.objects.filter(slot__user=self.user, status__in=['confirmed', 'verified']).count()
         return sent_confirmed + received_confirmed
 
+    # Auto-Approve logic and friends
+    auto_approve_friends = models.BooleanField(default=False)
+    auto_approve_min_reputation = models.FloatField(default=0.0)
+    friends = models.ManyToManyField('self', blank=True, symmetrical=True)
+
+class SubscriptionTier(models.Model):
+    name = models.CharField(max_length=50) # Tier 1, Tier 2, etc.
+    price = models.DecimalField(max_digits=10, decimal_places=2)
+    label = models.CharField(max_length=50, blank=True) # Swap Only, Starter, etc.
+    is_most_popular = models.BooleanField(default=False)
+    features = models.JSONField(default=list) # List of feature strings
+    best_for = models.TextField(blank=True)
+    
+    def __str__(self):
+        return self.name
+
+class UserSubscription(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='subscription')
+    tier = models.ForeignKey(SubscriptionTier, on_delete=models.PROTECT)
+    active_until = models.DateField()
+    renew_date = models.DateField()
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    def __str__(self):
+        return f"{self.user.username} - {self.tier.name}"
+
+class SubscriberVerification(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='verification')
+    is_connected_mailerlite = models.BooleanField(default=False)
+    mailerlite_api_key = models.CharField(max_length=255, blank=True, null=True, help_text="Stored for syncing purposes. Should be encrypted in production.")
+    mailerlite_api_key_last_4 = models.CharField(max_length=4, blank=True)
+    last_verified_at = models.DateTimeField(null=True, blank=True)
+    audience_size = models.PositiveIntegerField(default=0)
+    avg_open_rate = models.FloatField(default=0)
+    avg_click_rate = models.FloatField(default=0)
+    list_health_score = models.PositiveIntegerField(default=0)
+    
+    # Health Metrics
+    bounce_rate = models.FloatField(default=0)
+    unsubscribe_rate = models.FloatField(default=0)
+    active_rate = models.FloatField(default=0)
+    avg_engagement = models.FloatField(default=0)
+    
+    def __str__(self):
+        return f"{self.user.username} Verification"
+
+class SubscriberGrowth(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='subscriber_growth')
+    month = models.CharField(max_length=10) # Jan, Feb, etc.
+    count = models.PositiveIntegerField()
+    year = models.PositiveIntegerField(default=2024)
+
+    class Meta:
+        ordering = ['year', 'id']
+
+class CampaignAnalytic(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='campaign_analytics')
+    name = models.CharField(max_length=255) # June Newsletter - Romance Special
+    date = models.DateField()
+    subscribers = models.PositiveIntegerField()
+    open_rate = models.FloatField()
+    click_rate = models.FloatField()
+    type = models.CharField(max_length=50, default='Recent') # Recent, Top Performing, Swap Campaigns
+    
     def __str__(self):
         return self.name
 
@@ -216,16 +288,57 @@ class Notification(models.Model):
         return f"{self.title} for {self.recipient.username}"
 
 
+class Email(models.Model):
+    """
+    Internal email/messaging system for Communication Tools.
+    Authors can send emails to other authors on the platform.
+    """
+    FOLDER_CHOICES = [
+        ('inbox', 'Inbox'),
+        ('snoozed', 'Snoozed'),
+        ('sent', 'Sent'),
+        ('drafts', 'Drafts'),
+        ('spam', 'Spam'),
+        ('trash', 'Trash'),
+    ]
+
+    sender = models.ForeignKey(User, on_delete=models.CASCADE, related_name='sent_emails')
+    recipient = models.ForeignKey(User, on_delete=models.CASCADE, related_name='received_emails')
+    subject = models.CharField(max_length=255)
+    body = models.TextField()
+    folder = models.CharField(max_length=20, choices=FOLDER_CHOICES, default='inbox')
+    is_read = models.BooleanField(default=False)
+    is_starred = models.BooleanField(default=False)
+    is_draft = models.BooleanField(default=False)
+    parent_email = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, blank=True, related_name='replies')
+    attachment = models.FileField(upload_to='email_attachments/', blank=True, null=True)
+    sent_at = models.DateTimeField(null=True, blank=True)
+    snoozed_until = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.subject} — {self.sender.username} → {self.recipient.username}"
+
+
 class ChatMessage(models.Model):
+    """
+    Real-time chat messages between authors.
+    Used in the Communication Tools > Message tab.
+    """
     sender = models.ForeignKey(User, on_delete=models.CASCADE, related_name='sent_messages')
-    receiver = models.ForeignKey(User, on_delete=models.CASCADE, related_name='received_messages')
-    text = models.TextField()
-    is_file = models.BooleanField(default=False)
-    file = models.FileField(upload_to='chat_files/', blank=True, null=True)
+    recipient = models.ForeignKey(User, on_delete=models.CASCADE, related_name='received_messages')
+    content = models.TextField()
+    attachment = models.FileField(upload_to='chat_attachments/', blank=True, null=True)
+    is_read = models.BooleanField(default=False)
+    is_file = models.BooleanField(default=False) # Keep for frontend compatibility
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ['created_at']
 
     def __str__(self):
-        return f"From {self.sender} to {self.receiver} at {self.created_at}"
+        return f"{self.sender.username} → {self.recipient.username}: {self.content[:40]}"

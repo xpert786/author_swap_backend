@@ -3,9 +3,14 @@ from .models import NewsletterSlot, SwapRequest, Book, Profile
 
 class AuthorProfileSerializer(serializers.ModelSerializer):
     """Used for nested author representations"""
+    swaps_completed = serializers.SerializerMethodField()
+
     class Meta:
         model = Profile
         fields = ['id', 'name', 'profile_picture', 'swaps_completed', 'reputation_score']
+
+    def get_swaps_completed(self, obj):
+        return obj.swaps_completed
 
 class SlotExploreSerializer(serializers.ModelSerializer):
     """Serializer for Figma Screen 3 - Swap Partner Explorer"""
@@ -33,6 +38,8 @@ class SlotPartnerSerializer(serializers.ModelSerializer):
 
 class AuthorDetailedProfileSerializer(serializers.ModelSerializer):
     """Extended author profile with analytics and reputation for details modal"""
+    swaps_completed = serializers.SerializerMethodField()
+
     class Meta:
         model = Profile
         fields = [
@@ -40,6 +47,9 @@ class AuthorDetailedProfileSerializer(serializers.ModelSerializer):
             'avg_open_rate', 'avg_click_rate', 'monthly_growth', 'send_reliability_percent',
             'confirmed_sends_score', 'timeliness_score', 'missed_sends_penalty', 'communication_score'
         ]
+
+    def get_swaps_completed(self, obj):
+        return obj.swaps_completed
 
 class SlotDetailsSerializer(serializers.ModelSerializer):
     """Serializer for Figma Screen 1 - Slot Details Modal"""

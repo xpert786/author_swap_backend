@@ -13,6 +13,8 @@ Django==6.0.2
 django-filter==25.2
 djangorestframework==3.16.1
 djangorestframework_simplejwt==5.5.1
+google-auth==2.48.0
+google-auth-oauthlib==1.2.4
 hyperlink==21.0.0
 idna==3.11
 Incremental==24.11.0

@@ -192,3 +192,8 @@ MAILERLITE_API_KEY = os.getenv('MAILERLITE_API_KEY')  # Set your MailerLite API 
 MAILERLITE_PENDING_GROUP_ID = os.getenv('MAILERLITE_PENDING_GROUP_ID')  # MailerLite group for Pending Swaps
 MAILERLITE_APPROVED_GROUP_ID = os.getenv('MAILERLITE_APPROVED_GROUP_ID')  # MailerLite group for Approved/Active Swaps
 MAILERLITE_REJECTED_GROUP_ID = os.getenv('MAILERLITE_REJECTED_GROUP_ID')  # MailerLite group for Rejected Swaps
+
+# Google OAuth 2.0
+# Get this from: https://console.cloud.google.com → APIs & Services → Credentials
+# Create an OAuth 2.0 Client ID → Web application
+GOOGLE_OAUTH_CLIENT_ID = os.getenv('GOOGLE_OAUTH_CLIENT_ID', '')

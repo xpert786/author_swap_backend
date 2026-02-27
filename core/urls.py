@@ -6,8 +6,13 @@ from .views import (
     NewsletterSlotExportView, SwapPartnerDiscoveryView, SwapRequestListView, SwapRequestDetailView,
     MyPotentialBooksView, SwapPartnerDetailView, RecentSwapHistoryView,
     SwapManagementListView, AcceptSwapView, RejectSwapView, RestoreSwapView,
-    SwapHistoryDetailView, TrackMySwapView, CancelSwapView,
-    ConversationListView, ChatHistoryView, MySwapPartnersView, ComposePartnerListView,
+    SwapHistoryDetailView, TrackMySwapView, CancelSwapView, AuthorReputationView,
+    SubscriberVerificationView, ConnectMailerLiteView, SubscriberAnalyticsView,
+    RequestSwapPlacementView, AuthorDashboardView, AudienceSizeView,
+    AllSwapRequestsView,
+    EmailListView, ComposeEmailView, EmailDetailView, EmailActionView,
+    ChatAuthorListView, ConversationListView, ChatHistoryView, SendMessageView,
+    MySwapPartnersView, ComposePartnerListView,
 )
 from .ui_views import SlotExploreView, SlotDetailsView, SwapArrangementView
 
@@ -43,11 +48,32 @@ urlpatterns = [
     # --- Figma UI Specific APIs ---
     path('slots/explore/', SlotExploreView.as_view(), name='slots-explore'),
     path('slots/<int:pk>/details/', SlotDetailsView.as_view(), name='slots-details'),
+    path('slots/<int:slot_id>/request/', SwapRequestListView.as_view(), name='slot-request-create'),
+    path('slots/<int:slot_id>/request-placement/', RequestSwapPlacementView.as_view(), name='request-swap-placement'),
     path('swaps/<int:pk>/arrangement/', SwapArrangementView.as_view(), name='swaps-arrangement'),
     
-    # --- Chat APIs ---
-    path('chat/conversations/', ConversationListView.as_view(), name='chat-conversations'),
+    # Reputation & Verification
+    path('author-reputation/', AuthorReputationView.as_view(), name='author-reputation'),
+    path('subscriber-verification/', SubscriberVerificationView.as_view(), name='subscriber-verification'),
+    path('connect-mailerlite/', ConnectMailerLiteView.as_view(), name='connect-mailerlite'),
+    path('subscriber-analytics/', SubscriberAnalyticsView.as_view(), name='subscriber-analytics'),
+    
+    # Dashboard
+    path('author-dashboard/', AuthorDashboardView.as_view(), name='author-dashboard'),
+    path('audience-size/', AudienceSizeView.as_view(), name='audience-size'),
+    path('all-swap-requests/', AllSwapRequestsView.as_view(), name='all-swap-requests'),
+
+    # Email System
+    path('emails/', EmailListView.as_view(), name='email-list'),
+    path('emails/compose/', ComposeEmailView.as_view(), name='email-compose'),
+    path('emails/<int:pk>/', EmailDetailView.as_view(), name='email-detail'),
+    path('emails/<int:pk>/action/', EmailActionView.as_view(), name='email-action'),
+
+    # Chat System
+    path('chat/authors/', ChatAuthorListView.as_view(), name='chat-authors'),
+    path('chat/conversations/', ConversationListView.as_view(), name='conversation-list'),
     path('chat/history/<int:receiver_id>/', ChatHistoryView.as_view(), name='chat-history'),
     path('chat/compose/', ComposePartnerListView.as_view(), name='chat-compose'),
-    path('swap-partners/my/', MySwapPartnersView.as_view(), name='my-swap-partners'),
+    path('chat/my-partners/', MySwapPartnersView.as_view(), name='my-partners'),
+    path('chat/<int:user_id>/send/', SendMessageView.as_view(), name='send-message'),
 ]
