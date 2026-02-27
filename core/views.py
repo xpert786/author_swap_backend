@@ -616,6 +616,37 @@ class SwapRequestListView(APIView):
                 books_data = BookSerializer(user_books, many=True, context={'request': request}).data
                 
                 response_data['my_books'] = books_data
+                
+                # Check if the user has already requested this slot
+                from core.models import SwapRequest
+                sent_request = SwapRequest.objects.filter(slot=slot, requester=request.user).exists()
+                response_data['sent_request'] = sent_request
+                
+                # Compute Compatibility Indicators
+                indicators = {
+                    "genre_match": False,
+                    "audience_comparable": False,
+                    "reliability_match": False
+                }
+                
+                # Genre Match: True if the user has any active book in the slot's preferred genre
+                if any(b.primary_genre == slot.preferred_genre for b in user_books):
+                    indicators["genre_match"] = True
+                
+                owner_profile = slot.user.profiles.first()
+                requester_profile = request.user.profiles.first()
+                
+                if owner_profile and requester_profile:
+                    # Audience Comparable: Simplified logic (you can adjust this later to compare actual audience sizes)
+                    indicators["audience_comparable"] = True
+                    
+                    # Reliability Match: reputation score difference <= 1.0
+                    owner_rep = owner_profile.reputation_score or 0.0
+                    req_rep = requester_profile.reputation_score or 0.0
+                    indicators["reliability_match"] = abs(owner_rep - req_rep) <= 1.0
+                
+                response_data['compatibility'] = indicators
+                
                 return Response(response_data)
             except NewsletterSlot.DoesNotExist:
                 return Response({"detail": "Slot not found."}, status=status.HTTP_404_NOT_FOUND)
