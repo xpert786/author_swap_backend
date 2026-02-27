@@ -963,7 +963,7 @@ class EmailListSerializer(serializers.ModelSerializer):
     class Meta:
         model = Email
         fields = [
-            'id', 'subject', 'snippet', 'folder', 'is_read', 'is_starred', 'is_draft',
+            'id', 'subject', 'body', 'attachment', 'snippet', 'folder', 'is_read', 'is_starred', 'is_draft',
             'sender_name', 'sender_profile_picture',
             'recipient_name',
             'formatted_date', 'sent_at', 'created_at',

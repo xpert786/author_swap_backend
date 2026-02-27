@@ -133,6 +133,21 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     'is_typing': data.get('is_typing', True),
                 }
             )
+        elif msg_type == 'broadcast_message':
+            # Directly format and forward the message created by the REST API
+            message_data = data.get('message_data', {})
+            await self.channel_layer.group_send(
+                self.room_group_name,
+                {
+                    'type': 'chat_message',
+                    'message': message_data.get('content') or message_data.get('text', ''),
+                    'sender_id': self.user_id,
+                    'created_at': message_data.get('created_at'),
+                    'is_file': message_data.get('is_file', False),
+                    'attachment': message_data.get('attachment'),
+                    'sender_name': message_data.get('sender_name', ''),
+                }
+            )
         else:
             message_text = data.get('message')
             if message_text:
@@ -155,14 +170,24 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     print(f"DEBUG: Failed to save message")
 
     async def chat_message(self, event):
-        print(f"DEBUG: Broadcasting message: {event['message']}")
-        # Format for frontend: type 'chat' as expected by CommunicationTools.jsx
-        await self.send(text_data=json.dumps({
-            'type': 'chat',
-            'message': event['message'],
-            'sender_id': event['sender_id'],
-            'created_at': event['created_at']
-        }))
+        # Don't echo the message back to the sender.
+        # They already see it via the optimistic UI update.
+        # Only the recipient should receive this WebSocket push.
+        if str(event.get('sender_id')) == str(self.user_id):
+            return
+
+        print(f"DEBUG: Broadcasting message to recipient: {event.get('message', '')}")
+        payload = {
+            'type': 'chat_message', # Must match what CommunicationTools.jsx expects
+            'message': event.get('message'),
+            'sender_id': event.get('sender_id'),
+            'sender_name': event.get('sender_name'),
+            'is_file': event.get('is_file', False),
+            'attachment': event.get('attachment'),
+            'created_at': event.get('created_at')
+        }
+        await self.send(text_data=json.dumps(payload))
+
 
     async def typing_indicator(self, event):
         # Don't send typing indicator back to the sender
