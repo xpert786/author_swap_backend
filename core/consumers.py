@@ -155,14 +155,19 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     print(f"DEBUG: Failed to save message")
 
     async def chat_message(self, event):
-        print(f"DEBUG: Broadcasting message: {event['message']}")
-        # Format for frontend: type 'chat' as expected by CommunicationTools.jsx
-        await self.send(text_data=json.dumps({
-            'type': 'chat',
-            'message': event['message'],
-            'sender_id': event['sender_id'],
-            'created_at': event['created_at']
-        }))
+        print(f"DEBUG: Broadcasting message: {event.get('message', '')}")
+        # Build the payload, keeping all fields sent from the views
+        payload = {
+            'type': 'chat_message', # Must match what CommunicationTools.jsx expects
+            'message': event.get('message'),
+            'sender_id': event.get('sender_id'),
+            'sender_name': event.get('sender_name'),
+            'is_file': event.get('is_file', False),
+            'attachment': event.get('attachment'),
+            'created_at': event.get('created_at')
+        }
+        await self.send(text_data=json.dumps(payload))
+
 
     async def typing_indicator(self, event):
         # Don't send typing indicator back to the sender
