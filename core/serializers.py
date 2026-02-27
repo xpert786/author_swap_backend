@@ -358,7 +358,7 @@ class SwapManagementSerializer(serializers.ModelSerializer):
 
     def get_partner_user(self, obj):
         request = self.context.get('request')
-        if request and request.user == obj.requester:
+        if request and request.user.id == obj.requester_id:
             return obj.slot.user
         return obj.requester
 
@@ -569,7 +569,7 @@ class SwapHistoryDetailSerializer(serializers.ModelSerializer):
     def _get_partner(self, obj):
         """Determine the partner: if I own the slot, partner is the requester. Otherwise, partner is the slot owner."""
         request = self.context.get('request')
-        if request and obj.slot.user == request.user:
+        if request and obj.slot.user_id == request.user.id:
             return obj.requester
         return obj.slot.user
 
@@ -698,7 +698,7 @@ class TrackMySwapSerializer(serializers.ModelSerializer):
 
     def _get_partner(self, obj):
         request = self.context.get('request')
-        if request and obj.slot.user == request.user:
+        if request and obj.slot.user_id == request.user.id:
             return obj.requester
         return obj.slot.user
 

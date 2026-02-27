@@ -600,6 +600,15 @@ class SwapRequestListView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def get(self, request, *args, **kwargs):
+        slot_id = kwargs.get('slot_id')
+        if slot_id:
+            try:
+                slot = NewsletterSlot.objects.get(id=slot_id)
+                serializer = SlotExploreSerializer(slot)
+                return Response(serializer.data)
+            except NewsletterSlot.DoesNotExist:
+                return Response({"detail": "Slot not found."}, status=status.HTTP_404_NOT_FOUND)
+                
         # Requested to return data from NewsletterSlot table instead of SwapRequest
         slots = NewsletterSlot.objects.all().order_by('-created_at')
         serializer = SlotExploreSerializer(slots, many=True)
@@ -892,7 +901,7 @@ class AcceptSwapView(APIView):
     POST /api/accept-swap/<id>/
     Slot owner accepts a swap request.
     Moves subscriber from Pending → Approved in MailerLite.
-    """
+    """ 
     permission_classes = [IsAuthenticated]
 
     def post(self, request, pk):
