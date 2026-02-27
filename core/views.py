@@ -628,7 +628,7 @@ class SwapRequestListView(APIView):
                 # Fetch the current user's active books to allow them to pick one to promote
                 from core.models import Book
                 from core.serializers import BookSerializer
-                user_books = Book.objects.filter(user=request.user, is_active=True)
+                user_books = Book.objects.filter(user=request.user)
                 
                 # Use the exact same serializer as the AddBookView to reuse the structure
                 books_data = BookSerializer(user_books, many=True, context={'request': request}).data

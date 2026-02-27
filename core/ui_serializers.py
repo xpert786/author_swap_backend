@@ -4,10 +4,11 @@ from .models import NewsletterSlot, SwapRequest, Book, Profile
 class AuthorProfileSerializer(serializers.ModelSerializer):
     """Used for nested author representations"""
     swaps_completed = serializers.SerializerMethodField()
+    rating = serializers.FloatField(source='reputation_score', read_only=True)
 
     class Meta:
         model = Profile
-        fields = ['id', 'name', 'profile_picture', 'swaps_completed', 'reputation_score']
+        fields = ['id', 'name', 'profile_picture', 'swaps_completed', 'reputation_score', 'rating']
 
     def get_swaps_completed(self, obj):
         return obj.swaps_completed
@@ -31,19 +32,21 @@ class SlotExploreSerializer(serializers.ModelSerializer):
 class SlotPartnerSerializer(serializers.ModelSerializer):
     """Used to serialize SwapRequest instances as partners inside a Slot"""
     author = AuthorProfileSerializer(source='requester.profiles.first', read_only=True)
+    rating = serializers.FloatField(source='requester.profiles.first.reputation_score', read_only=True)
     
     class Meta:
         model = SwapRequest
-        fields = ['id', 'author', 'status', 'created_at']
+        fields = ['id', 'author', 'status', 'created_at', 'rating']
 
 class AuthorDetailedProfileSerializer(serializers.ModelSerializer):
     """Extended author profile with analytics and reputation for details modal"""
     swaps_completed = serializers.SerializerMethodField()
+    rating = serializers.FloatField(source='reputation_score', read_only=True)
 
     class Meta:
         model = Profile
         fields = [
-            'id', 'name', 'profile_picture', 'swaps_completed', 'reputation_score',
+            'id', 'name', 'profile_picture', 'swaps_completed', 'reputation_score', 'rating',
             'avg_open_rate', 'avg_click_rate', 'monthly_growth', 'send_reliability_percent',
             'confirmed_sends_score', 'timeliness_score', 'missed_sends_penalty', 'communication_score'
         ]
