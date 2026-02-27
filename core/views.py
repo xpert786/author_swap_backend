@@ -2329,26 +2329,6 @@ class SendMessageView(APIView):
 
             channel_layer = get_channel_layer()
             if channel_layer:
-                # 1. Send to recipient's notification bell channel
-                async_to_sync(channel_layer.group_send)(
-                    f'user_{recipient.id}_notifications',
-                    {
-                        'type': 'send_notification',
-                        'notification': {
-                            'type': 'chat_message',
-                            'message_id': msg.id,
-                            'sender_id': user.id,
-                            'sender_name': sender_name,
-                            'title': 'New Message 💬',
-                            'message': f'You have a new message from {sender_name}',
-                            'content': msg.content,
-                            'is_file': msg.is_file,
-                            'attachment': request.build_absolute_uri(msg.attachment.url) if msg.attachment else None,
-                            'created_at': msg.created_at.isoformat(),
-                        }
-                    }
-                )
-
                 # 2. Send to dedicated chat room channel
                 async_to_sync(channel_layer.group_send)(
                     f'chat_{min(user.id, recipient.id)}_{max(user.id, recipient.id)}',
