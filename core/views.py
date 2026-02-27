@@ -1,3 +1,5 @@
+from django.contrib.auth import get_user_model
+User = get_user_model()
 from rest_framework.views import APIView
 from django.http import Http404
 from rest_framework.response import Response
@@ -7,7 +9,9 @@ from .serializers import (
     NewsletterSlotSerializer, NotificationSerializer, SwapPartnerSerializer, 
     SwapRequestSerializer, SwapManagementSerializer, BookSerializer, ProfileSerializer, RecentSwapSerializer,
     SubscriptionTierSerializer, UserSubscriptionSerializer, SubscriberVerificationSerializer,
-    SubscriberGrowthSerializer, CampaignAnalyticSerializer
+    SubscriberGrowthSerializer, CampaignAnalyticSerializer, ChatMessageSerializer,
+    ConversationListSerializer, ConversationPartnerSerializer,
+    EmailListSerializer, EmailDetailSerializer, ComposeEmailSerializer
 )
 from .ui_serializers import SlotExploreSerializer, SlotDetailsSerializer
 from authentication.constants import GENRE_SUBGENRE_MAPPING
