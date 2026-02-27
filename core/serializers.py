@@ -804,6 +804,11 @@ class TrackMySwapSerializer(serializers.ModelSerializer):
             "twitter": profile.tiktok_url or None,
         }
 
+from django.db.models import Q
+from django.contrib.auth import get_user_model
+User = get_user_model()
+from core.models import ChatMessage, SubscriptionTier, UserSubscription, SubscriberVerification, SubscriberGrowth, CampaignAnalytic, Email, Profile
+
 
 class SubscriptionTierSerializer(serializers.ModelSerializer):
     class Meta:
@@ -926,7 +931,6 @@ class CampaignAnalyticSerializer(serializers.ModelSerializer):
 # =====================================================================
 # EMAIL / COMMUNICATION TOOLS
 # =====================================================================
-from core.models import Email
 
 
 class EmailListSerializer(serializers.ModelSerializer):
@@ -1061,6 +1065,76 @@ class ComposeEmailSerializer(serializers.Serializer):
 from core.models import ChatMessage
 
 
+class ConversationPartnerSerializer(serializers.ModelSerializer):
+    name = serializers.SerializerMethodField()
+    avatar = serializers.SerializerMethodField()
+    last_message = serializers.SerializerMethodField()
+    time = serializers.SerializerMethodField()
+    swap_status = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = ['id', 'username', 'name', 'avatar', 'last_message', 'time', 'swap_status']
+
+    def get_name(self, obj):
+        profile = obj.profiles.first()
+        if profile and profile.name:
+            return profile.name
+        return obj.username
+
+    def get_swap_status(self, obj):
+        request = self.context.get('request')
+        if not request:
+            return None
+        
+        swap = SwapRequest.objects.filter(
+            (Q(requester=request.user) & Q(slot__user=obj)) |
+            (Q(requester=obj) & Q(slot__user=request.user))
+        ).exclude(status='rejected').order_by('-created_at').first()
+        
+        return swap.status if swap else None
+
+    def get_avatar(self, obj):
+        profile = obj.profiles.first()
+        if profile and profile.profile_picture:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(profile.profile_picture.url)
+            return profile.profile_picture.url
+        return "https://randomuser.me/api/portraits/men/32.jpg"
+
+    def get_last_message(self, obj):
+        request = self.context.get('request')
+        if not request:
+            return None
+        
+        last_msg = ChatMessage.objects.filter(
+            (Q(sender=request.user) & Q(recipient=obj)) |
+            (Q(sender=obj) & Q(recipient=request.user))
+        ).order_by('-created_at').first()
+        
+        return last_msg.content if last_msg else "No messages yet"
+
+    def get_time(self, obj):
+        request = self.context.get('request')
+        if not request:
+            return None
+        
+        last_msg = ChatMessage.objects.filter(
+            (Q(sender=request.user) & Q(recipient=obj)) |
+            (Q(sender=obj) & Q(recipient=request.user))
+        ).order_by('-created_at').first()
+        
+        if last_msg:
+            from django.utils import timezone
+            now = timezone.now().date()
+            target = last_msg.created_at.date()
+            if target == now:
+                return last_msg.created_at.strftime("%I:%M %p")
+            return target.strftime("%d %b")
+        return ""
+
+
 class ChatMessageSerializer(serializers.ModelSerializer):
     """
     Serializer for individual chat messages.
@@ -1069,11 +1143,12 @@ class ChatMessageSerializer(serializers.ModelSerializer):
     sender_profile_picture = serializers.SerializerMethodField()
     formatted_time = serializers.SerializerMethodField()
     is_mine = serializers.SerializerMethodField()
+    text = serializers.CharField(source='content', read_only=True)
 
     class Meta:
         model = ChatMessage
         fields = [
-            'id', 'content', 'attachment', 'is_read',
+            'id', 'sender', 'content', 'text', 'attachment', 'is_read', 'is_file',
             'sender_name', 'sender_profile_picture',
             'formatted_time', 'is_mine',
             'created_at',

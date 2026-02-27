@@ -334,6 +334,7 @@ class ChatMessage(models.Model):
     content = models.TextField()
     attachment = models.FileField(upload_to='chat_attachments/', blank=True, null=True)
     is_read = models.BooleanField(default=False)
+    is_file = models.BooleanField(default=False) # Keep for frontend compatibility
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

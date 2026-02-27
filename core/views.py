@@ -16,7 +16,7 @@ from authentication.constants import GENRE_SUBGENRE_MAPPING
 from .models import (
     Book, NewsletterSlot, Profile, SwapRequest, Notification, 
     SubscriptionTier, UserSubscription, SubscriberVerification,
-    SubscriberGrowth, CampaignAnalytic
+    SubscriberGrowth, CampaignAnalytic, Email, ChatMessage
 )
 import calendar
 from datetime import datetime, date, timedelta
@@ -1153,6 +1153,7 @@ class CancelSwapView(APIView):
         swap.save()
 
         # Notification for slot owner
+        from core.models import Notification
         Notification.objects.create(
             recipient=swap.slot.user,
             title="Swap Cancelled 🛑",
@@ -1166,6 +1167,190 @@ class CancelSwapView(APIView):
             "swap_id": swap.id,
             "status": swap.status,
         })
+
+from django.db.models import Q
+from django.contrib.auth import get_user_model
+User = get_user_model()
+from .models import ChatMessage, SwapRequest
+from .serializers import ChatMessageSerializer, ConversationPartnerSerializer
+from django.db.models import OuterRef, Subquery, Max, Count, Case, When, Value, CharField, BooleanField, F
+from django.utils import timezone
+from datetime import timedelta
+
+class ConversationListView(APIView):
+    """
+    GET /api/conversations/
+    Returns a list of all unique users the current user has chatted with,
+    along with the last message and unread count.
+    Supports search by partner username.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        search_query = request.query_params.get('search', '')
+
+        # Subquery to get the last message for each conversation
+        latest_messages = ChatMessage.objects.filter(
+            Q(sender=OuterRef('sender'), recipient=OuterRef('recipient')) |
+            Q(sender=OuterRef('recipient'), recipient=OuterRef('sender'))
+        ).order_by('-timestamp').values('message', 'timestamp', 'sender_id')[:1]
+
+        # Get unique conversation partners
+        # Partners are users who have either sent a message to `user` or received a message from `user`
+        partners_sent_to = User.objects.filter(
+            id__in=ChatMessage.objects.filter(sender=user).values_list('recipient__id', flat=True)
+        )
+        partners_received_from = User.objects.filter(
+            id__in=ChatMessage.objects.filter(recipient=user).values_list('sender__id', flat=True)
+        )
+        all_partners = (partners_sent_to | partners_received_from).distinct().exclude(id=user.id)
+
+        if search_query:
+            all_partners = all_partners.filter(username__icontains=search_query)
+
+        # Annotate partners with last message details and unread count
+        conversations = all_partners.annotate(
+            last_message_text=Subquery(latest_messages.values('message')),
+            last_message_timestamp=Subquery(latest_messages.values('timestamp')),
+            last_message_sender_id=Subquery(latest_messages.values('sender_id')),
+            unread_count=Count(
+                'received_messages',
+                filter=Q(received_messages__recipient=user, received_messages__is_read=False)
+            ),
+            # Determine if the last message was sent by the current user
+            last_message_is_mine=Case(
+                When(last_message_sender_id=user.id, then=Value(True)),
+                default=Value(False),
+                output_field=BooleanField()
+            )
+        ).order_by('-last_message_timestamp')
+
+        serializer = ConversationPartnerSerializer(conversations, many=True, context={'request': request})
+        return Response(serializer.data)
+
+
+class ChatMessageListView(APIView):
+    """
+    GET /api/conversations/<partner_id>/messages/
+    Returns all messages between the current user and a specific partner.
+    POST /api/conversations/<partner_id>/messages/
+    Sends a new message to the partner.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, partner_id):
+        user = request.user
+        partner = User.objects.get(pk=partner_id)
+
+        messages = ChatMessage.objects.filter(
+            Q(sender=user, recipient=partner) | Q(sender=partner, recipient=user)
+        ).order_by('timestamp')
+
+        # Mark messages sent by the partner as read
+        ChatMessage.objects.filter(sender=partner, recipient=user, is_read=False).update(is_read=True)
+
+        serializer = ChatMessageSerializer(messages, many=True, context={'request': request})
+        return Response(serializer.data)
+
+    def post(self, request, partner_id):
+        user = request.user
+        partner = User.objects.get(pk=partner_id)
+        message_text = request.data.get('message')
+
+        if not message_text:
+            return Response({"detail": "Message cannot be empty."}, status=status.HTTP_400_BAD_REQUEST)
+
+        message = ChatMessage.objects.create(
+            sender=user,
+            recipient=partner,
+            message=message_text
+        )
+        serializer = ChatMessageSerializer(message, context={'request': request})
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+class ComposePartnerListView(APIView):
+    """
+    GET /api/compose-partners/
+    Returns a list of potential swap partners for composing a new message.
+    This includes users with whom the current user has pending, confirmed, or completed swaps.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+
+        # Find users involved in swaps with the current user
+        # where the swap is not rejected or cancelled
+        swap_partners_as_requester = User.objects.filter(
+            id__in=SwapRequest.objects.filter(
+                requester=user,
+                status__in=['pending', 'confirmed', 'completed', 'verified']
+            ).values_list('slot__user__id', flat=True)
+        )
+
+        swap_partners_as_slot_owner = User.objects.filter(
+            id__in=SwapRequest.objects.filter(
+                slot__user=user,
+                status__in=['pending', 'confirmed', 'completed', 'verified']
+            ).values_list('requester__id', flat=True)
+        )
+
+        # Combine and get unique partners
+        potential_partners = (swap_partners_as_requester | swap_partners_as_slot_owner).distinct().exclude(id=user.id)
+
+        # Serialize just the basic user info for selection
+        serializer = ConversationPartnerSerializer(potential_partners, many=True, context={'request': request})
+        return Response(serializer.data)
+
+
+class MySwapPartnersView(APIView):
+    """
+    GET /api/my-swap-partners/
+    Returns a list of all unique users the current user has an active or past swap with,
+    along with the status of their latest swap.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+
+        # Get all swap requests where the user is either the requester or the slot owner
+        # Exclude rejected/cancelled swaps for this list, or include them if desired for "past partners"
+        swaps = SwapRequest.objects.filter(
+            Q(requester=user) | Q(slot__user=user)
+        ).exclude(status__in=['rejected', 'cancelled']).order_by('-created_at')
+
+        partner_data = {}
+        for swap in swaps:
+            partner = swap.requester if swap.slot.user == user else swap.slot.user
+            if partner.id not in partner_data:
+                partner_data[partner.id] = {
+                    'partner': partner,
+                    'latest_swap_status': swap.status,
+                    'latest_swap_id': swap.id,
+                    'latest_swap_date': swap.created_at,
+                }
+            # If there are multiple swaps, ensure we keep the most recent one's status
+            elif swap.created_at > partner_data[partner.id]['latest_swap_date']:
+                partner_data[partner.id]['latest_swap_status'] = swap.status
+                partner_data[partner.id]['latest_swap_id'] = swap.id
+                partner_data[partner.id]['latest_swap_date'] = swap.created_at
+
+        # Convert dictionary to a list of serialized partners
+        result = []
+        for partner_id, data in partner_data.items():
+            partner_serializer = ConversationPartnerSerializer(data['partner'], context={'request': request}).data
+            partner_serializer['latest_swap_status'] = data['latest_swap_status']
+            partner_serializer['latest_swap_id'] = data['latest_swap_id']
+            result.append(partner_serializer)
+
+        # Sort by latest swap date (descending)
+        result.sort(key=lambda x: partner_data[x['id']]['latest_swap_date'], reverse=True)
+
+        return Response(result)
+
 
 class AuthorReputationView(APIView):
     """
@@ -1956,12 +2141,151 @@ class ConversationListView(APIView):
     """
     GET /api/chat/conversations/?search=query
     Returns list of conversations the current user has (authors they've chatted with).
-    Each has: last message, unread count, profile info.
+    Each has: last message, unread count, profile info, and swap status.
     """
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         user = request.user
+        search = request.query_params.get('search', '').strip()
+
+        # Find all unique users the current user has chatted with
+        sent_to_ids = ChatMessage.objects.filter(sender=user).values_list('recipient_id', flat=True).distinct()
+        received_from_ids = ChatMessage.objects.filter(recipient=user).values_list('sender_id', flat=True).distinct()
+        chat_partner_ids = set(sent_to_ids) | set(received_from_ids)
+
+        if not chat_partner_ids:
+            return Response([])
+
+        profiles = Profile.objects.filter(user_id__in=chat_partner_ids).select_related('user')
+
+        if search:
+            profiles = profiles.filter(
+                Q(name__icontains=search) |
+                Q(user__username__icontains=search)
+            )
+
+        from django.utils import timezone
+        from core.serializers import ConversationListSerializer
+
+        conversations = []
+        for profile in profiles:
+            partner = profile.user
+
+            # Last message between the two users
+            last_msg = ChatMessage.objects.filter(
+                Q(sender=user, recipient=partner) |
+                Q(sender=partner, recipient=user)
+            ).order_by('-created_at').first()
+
+            # Unread count (messages FROM this partner that I haven't read)
+            unread = ChatMessage.objects.filter(
+                sender=partner, recipient=user, is_read=False
+            ).count()
+
+            profile_pic = None
+            if profile.profile_picture:
+                profile_pic = request.build_absolute_uri(profile.profile_picture.url)
+
+            # Format time
+            formatted_time = ""
+            if last_msg:
+                now = timezone.now().date()
+                msg_date = last_msg.created_at.date()
+                if msg_date == now:
+                    formatted_time = "Today"
+                elif (now - msg_date).days == 1:
+                    formatted_time = "Yesterday"
+                else:
+                    formatted_time = msg_date.strftime("%m/%d/%Y")
+
+            # Swap status logic from HEAD
+            swap = SwapRequest.objects.filter(
+                (Q(requester=user) & Q(slot__user=partner)) |
+                (Q(requester=partner) & Q(slot__user=user))
+            ).exclude(status='rejected').order_by('-created_at').first()
+            
+            swap_status = swap.status if swap else None
+
+            conversations.append({
+                'id': partner.id, # Added for frontend compatibility
+                'user_id': partner.id,
+                'username': partner.username,
+                'name': profile.name,
+                'avatar': profile_pic, # Added for frontend compatibility
+                'profile_picture': profile_pic,
+                'location': profile.location,
+                'lastMessage': last_msg.content if last_msg else "", # Added for frontend compatibility
+                'last_message': last_msg.content[:80] if last_msg else "",
+                'last_message_time': last_msg.created_at if last_msg else None,
+                'time': formatted_time, # Added for frontend compatibility
+                'formatted_time': formatted_time,
+                'unread_count': unread,
+                'swap_status': swap_status, # Added for frontend compatibility
+            })
+
+        # Sort: most recent conversation first
+        conversations.sort(key=lambda x: x.get('last_message_time') or datetime.min, reverse=True)
+
+        return Response(conversations)
+
+class ComposePartnerListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        
+        # 1. Get all swap partners (eligible to chat)
+        swap_requests = SwapRequest.objects.filter(
+            (Q(requester=user) | Q(slot__user=user))
+        ).exclude(status='rejected')
+        
+        eligible_user_ids = set()
+        for sr in swap_requests:
+            if sr.requester == user:
+                eligible_user_ids.add(sr.slot.user_id)
+            else:
+                eligible_user_ids.add(sr.requester_id)
+        
+        # 2. Get user IDs who ALREADY have a conversation
+        chatted_user_ids = set(User.objects.filter(
+            Q(sent_messages__recipient=user) | 
+            Q(received_messages__sender=user)
+        ).values_list('id', flat=True).distinct())
+        
+        # 3. Filter: eligible minus chatted
+        compose_user_ids = eligible_user_ids - chatted_user_ids
+        
+        compose_users = User.objects.filter(id__in=compose_user_ids)
+        
+        from core.serializers import ConversationPartnerSerializer
+        serializer = ConversationPartnerSerializer(compose_users, many=True, context={'request': request})
+        return Response(serializer.data)
+
+class MySwapPartnersView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        
+        # Get swap partners (any swap relationship, excluding rejected)
+        swap_requests = SwapRequest.objects.filter(
+            (Q(requester=user) | Q(slot__user=user))
+        ).exclude(status='rejected')
+        
+        partner_users = []
+        for sr in swap_requests:
+            if sr.requester == user:
+                partner_users.append(sr.slot.user)
+            else:
+                partner_users.append(sr.requester)
+        
+        # Unique
+        partner_users = list(set(partner_users))
+        
+        from core.serializers import ConversationPartnerSerializer
+        serializer = ConversationPartnerSerializer(partner_users, many=True, context={'request': request})
+        return Response(serializer.data)
         search = request.query_params.get('search', '').strip()
 
         # Find all unique users the current user has chatted with
@@ -2034,21 +2358,19 @@ class ConversationListView(APIView):
 
 class ChatHistoryView(APIView):
     """
-    GET /api/chat/<user_id>/
+    GET /api/chat/history/<receiver_id>/
     Returns chat message history between the current user and the specified user.
     Messages grouped by date with "Yesterday", "Today" labels.
     Also marks all unread messages from the other user as read.
     """
     permission_classes = [IsAuthenticated]
 
-    def get(self, request, user_id):
+    def get(self, request, receiver_id):
         user = request.user
 
         # Validate other user exists
-        from django.contrib.auth import get_user_model
-        User = get_user_model()
         try:
-            other_user = User.objects.get(id=user_id)
+            other_user = User.objects.get(id=receiver_id)
         except User.DoesNotExist:
             return Response({"detail": "User not found."}, status=status.HTTP_404_NOT_FOUND)
 
@@ -2091,17 +2413,24 @@ class ChatHistoryView(APIView):
         # Other user profile info
         other_profile = other_user.profiles.first()
         other_info = {
+            'id': other_user.id, # Added for frontend compatibility
             'user_id': other_user.id,
             'username': other_user.username,
             'name': other_profile.name if other_profile else other_user.username,
+            'avatar': request.build_absolute_uri(other_profile.profile_picture.url) if other_profile and other_profile.profile_picture else None, # Added for frontend compatibility
             'profile_picture': request.build_absolute_uri(other_profile.profile_picture.url) if other_profile and other_profile.profile_picture else None,
             'location': other_profile.location if other_profile else None,
         }
 
-        return Response({
-            'partner': other_info,
-            'chat': result,
-        })
+        # Flat list for the frontend's current implementation if it doesn't support grouping
+        # Wait, the frontend expects a flat list: data.map(...)
+        messages_flat = ChatMessageSerializer(messages, many=True, context={'request': request}).data
+        
+        # If the frontend expects a flat list, we should probably return that for now
+        # but the ad6737 version returns grouped. Let's provide BOTH or choose.
+        # CommunicationTools.jsx: const data = await getChatHistory(activeConv); const formattedMessages = data.map(...)
+        # So it expects a FLAT ARRAY.
+        return Response(messages_flat)
 
 
 class SendMessageView(APIView):
@@ -2120,8 +2449,6 @@ class SendMessageView(APIView):
         if not content:
             return Response({"detail": "Message content is required."}, status=status.HTTP_400_BAD_REQUEST)
 
-        from django.contrib.auth import get_user_model
-        User = get_user_model()
         try:
             recipient = User.objects.get(id=user_id)
         except User.DoesNotExist:
@@ -2139,13 +2466,13 @@ class SendMessageView(APIView):
         # Handle attachment
         if request.FILES.get('attachment'):
             msg.attachment = request.FILES['attachment']
+            msg.is_file = True
             msg.save()
 
         # Push real-time notification via WebSocket
         try:
             from channels.layers import get_channel_layer
             from asgiref.sync import async_to_sync
-            import json
 
             channel_layer = get_channel_layer()
             sender_profile = user.profiles.first()
@@ -2172,7 +2499,9 @@ class SendMessageView(APIView):
                 f'chat_{min(user.id, recipient.id)}_{max(user.id, recipient.id)}',
                 {
                     'type': 'chat_message',
-                    'message': ChatMessageSerializer(msg, context={'request': request}).data,
+                    'message': content, # Keep it simple for now or use the serializer field
+                    'sender_id': user.id,
+                    'created_at': msg.created_at.isoformat(),
                 }
             )
         except Exception:
