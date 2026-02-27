@@ -133,6 +133,21 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     'is_typing': data.get('is_typing', True),
                 }
             )
+        elif msg_type == 'broadcast_message':
+            # Directly format and forward the message created by the REST API
+            message_data = data.get('message_data', {})
+            await self.channel_layer.group_send(
+                self.room_group_name,
+                {
+                    'type': 'chat_message',
+                    'message': message_data.get('content') or message_data.get('text', ''),
+                    'sender_id': self.user_id,
+                    'created_at': message_data.get('created_at'),
+                    'is_file': message_data.get('is_file', False),
+                    'attachment': message_data.get('attachment'),
+                    'sender_name': message_data.get('sender_name', ''),
+                }
+            )
         else:
             message_text = data.get('message')
             if message_text:
