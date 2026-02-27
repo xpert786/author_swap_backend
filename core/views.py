@@ -2284,11 +2284,7 @@ class SendMessageView(APIView):
 
     def post(self, request, user_id):
         user = request.user
-        content = request.data.get('content', '').strip()
-
-        if not content:
-            return Response({"detail": "Message content is required."}, status=status.HTTP_400_BAD_REQUEST)
-
+        
         try:
             recipient = User.objects.get(id=user_id)
         except User.DoesNotExist:
