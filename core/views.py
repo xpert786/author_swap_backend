@@ -398,6 +398,24 @@ class TestWebSocketNotificationView(APIView):
             message="You successfully hit the test endpoint and triggered a WebSocket message.",
             action_url="/"
         )
+        return Response({"detail": "Notification sent."})
+
+class NotificationUnreadCountView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        notification_unread = Notification.objects.filter(recipient=user, is_read=False).count()
+        chat_unread = ChatMessage.objects.filter(recipient=user, is_read=False).count()
+        from core.models import Email
+        email_unread = Email.objects.filter(recipient=user, is_read=False, folder='inbox').count()
+        
+        return Response({
+            "notifications": notification_unread,
+            "chat": chat_unread,
+            "email": email_unread,
+            "total": notification_unread + chat_unread + email_unread
+        })
         
         return Response({"message": "WebSocket notification triggered!"})
 
@@ -1168,188 +1186,6 @@ class CancelSwapView(APIView):
             "status": swap.status,
         })
 
-from django.db.models import Q
-from django.contrib.auth import get_user_model
-User = get_user_model()
-from .models import ChatMessage, SwapRequest
-from .serializers import ChatMessageSerializer, ConversationPartnerSerializer
-from django.db.models import OuterRef, Subquery, Max, Count, Case, When, Value, CharField, BooleanField, F
-from django.utils import timezone
-from datetime import timedelta
-
-class ConversationListView(APIView):
-    """
-    GET /api/conversations/
-    Returns a list of all unique users the current user has chatted with,
-    along with the last message and unread count.
-    Supports search by partner username.
-    """
-    permission_classes = [IsAuthenticated]
-
-    def get(self, request):
-        user = request.user
-        search_query = request.query_params.get('search', '')
-
-        # Subquery to get the last message for each conversation
-        latest_messages = ChatMessage.objects.filter(
-            Q(sender=OuterRef('sender'), recipient=OuterRef('recipient')) |
-            Q(sender=OuterRef('recipient'), recipient=OuterRef('sender'))
-        ).order_by('-timestamp').values('message', 'timestamp', 'sender_id')[:1]
-
-        # Get unique conversation partners
-        # Partners are users who have either sent a message to `user` or received a message from `user`
-        partners_sent_to = User.objects.filter(
-            id__in=ChatMessage.objects.filter(sender=user).values_list('recipient__id', flat=True)
-        )
-        partners_received_from = User.objects.filter(
-            id__in=ChatMessage.objects.filter(recipient=user).values_list('sender__id', flat=True)
-        )
-        all_partners = (partners_sent_to | partners_received_from).distinct().exclude(id=user.id)
-
-        if search_query:
-            all_partners = all_partners.filter(username__icontains=search_query)
-
-        # Annotate partners with last message details and unread count
-        conversations = all_partners.annotate(
-            last_message_text=Subquery(latest_messages.values('message')),
-            last_message_timestamp=Subquery(latest_messages.values('timestamp')),
-            last_message_sender_id=Subquery(latest_messages.values('sender_id')),
-            unread_count=Count(
-                'received_messages',
-                filter=Q(received_messages__recipient=user, received_messages__is_read=False)
-            ),
-            # Determine if the last message was sent by the current user
-            last_message_is_mine=Case(
-                When(last_message_sender_id=user.id, then=Value(True)),
-                default=Value(False),
-                output_field=BooleanField()
-            )
-        ).order_by('-last_message_timestamp')
-
-        serializer = ConversationPartnerSerializer(conversations, many=True, context={'request': request})
-        return Response(serializer.data)
-
-
-class ChatMessageListView(APIView):
-    """
-    GET /api/conversations/<partner_id>/messages/
-    Returns all messages between the current user and a specific partner.
-    POST /api/conversations/<partner_id>/messages/
-    Sends a new message to the partner.
-    """
-    permission_classes = [IsAuthenticated]
-
-    def get(self, request, partner_id):
-        user = request.user
-        partner = User.objects.get(pk=partner_id)
-
-        messages = ChatMessage.objects.filter(
-            Q(sender=user, recipient=partner) | Q(sender=partner, recipient=user)
-        ).order_by('timestamp')
-
-        # Mark messages sent by the partner as read
-        ChatMessage.objects.filter(sender=partner, recipient=user, is_read=False).update(is_read=True)
-
-        serializer = ChatMessageSerializer(messages, many=True, context={'request': request})
-        return Response(serializer.data)
-
-    def post(self, request, partner_id):
-        user = request.user
-        partner = User.objects.get(pk=partner_id)
-        message_text = request.data.get('message')
-
-        if not message_text:
-            return Response({"detail": "Message cannot be empty."}, status=status.HTTP_400_BAD_REQUEST)
-
-        message = ChatMessage.objects.create(
-            sender=user,
-            recipient=partner,
-            message=message_text
-        )
-        serializer = ChatMessageSerializer(message, context={'request': request})
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
-
-
-class ComposePartnerListView(APIView):
-    """
-    GET /api/compose-partners/
-    Returns a list of potential swap partners for composing a new message.
-    This includes users with whom the current user has pending, confirmed, or completed swaps.
-    """
-    permission_classes = [IsAuthenticated]
-
-    def get(self, request):
-        user = request.user
-
-        # Find users involved in swaps with the current user
-        # where the swap is not rejected or cancelled
-        swap_partners_as_requester = User.objects.filter(
-            id__in=SwapRequest.objects.filter(
-                requester=user,
-                status__in=['pending', 'confirmed', 'completed', 'verified']
-            ).values_list('slot__user__id', flat=True)
-        )
-
-        swap_partners_as_slot_owner = User.objects.filter(
-            id__in=SwapRequest.objects.filter(
-                slot__user=user,
-                status__in=['pending', 'confirmed', 'completed', 'verified']
-            ).values_list('requester__id', flat=True)
-        )
-
-        # Combine and get unique partners
-        potential_partners = (swap_partners_as_requester | swap_partners_as_slot_owner).distinct().exclude(id=user.id)
-
-        # Serialize just the basic user info for selection
-        serializer = ConversationPartnerSerializer(potential_partners, many=True, context={'request': request})
-        return Response(serializer.data)
-
-
-class MySwapPartnersView(APIView):
-    """
-    GET /api/my-swap-partners/
-    Returns a list of all unique users the current user has an active or past swap with,
-    along with the status of their latest swap.
-    """
-    permission_classes = [IsAuthenticated]
-
-    def get(self, request):
-        user = request.user
-
-        # Get all swap requests where the user is either the requester or the slot owner
-        # Exclude rejected/cancelled swaps for this list, or include them if desired for "past partners"
-        swaps = SwapRequest.objects.filter(
-            Q(requester=user) | Q(slot__user=user)
-        ).exclude(status__in=['rejected', 'cancelled']).order_by('-created_at')
-
-        partner_data = {}
-        for swap in swaps:
-            partner = swap.requester if swap.slot.user == user else swap.slot.user
-            if partner.id not in partner_data:
-                partner_data[partner.id] = {
-                    'partner': partner,
-                    'latest_swap_status': swap.status,
-                    'latest_swap_id': swap.id,
-                    'latest_swap_date': swap.created_at,
-                }
-            # If there are multiple swaps, ensure we keep the most recent one's status
-            elif swap.created_at > partner_data[partner.id]['latest_swap_date']:
-                partner_data[partner.id]['latest_swap_status'] = swap.status
-                partner_data[partner.id]['latest_swap_id'] = swap.id
-                partner_data[partner.id]['latest_swap_date'] = swap.created_at
-
-        # Convert dictionary to a list of serialized partners
-        result = []
-        for partner_id, data in partner_data.items():
-            partner_serializer = ConversationPartnerSerializer(data['partner'], context={'request': request}).data
-            partner_serializer['latest_swap_status'] = data['latest_swap_status']
-            partner_serializer['latest_swap_id'] = data['latest_swap_id']
-            result.append(partner_serializer)
-
-        # Sort by latest swap date (descending)
-        result.sort(key=lambda x: partner_data[x['id']]['latest_swap_date'], reverse=True)
-
-        return Response(result)
 
 
 class AuthorReputationView(APIView):
@@ -2478,6 +2314,16 @@ class SendMessageView(APIView):
             sender_profile = user.profiles.first()
             sender_name = sender_profile.name if sender_profile else user.username
 
+            # Create persistent notification
+            from core.models import Notification
+            Notification.objects.create(
+                recipient=recipient,
+                title='New Message 💬',
+                message=f'You have a new message from {sender_name}',
+                badge='NEW',
+                action_url=f"/communication?conv={user.id}"
+            )
+
             # Send to recipient's notification channel
             async_to_sync(channel_layer.group_send)(
                 f'user_{recipient.id}_notifications',
@@ -2488,6 +2334,8 @@ class SendMessageView(APIView):
                         'message_id': msg.id,
                         'sender_id': user.id,
                         'sender_name': sender_name,
+                        'title': 'New Message 💬',
+                        'message': f'You have a new message from {sender_name}',
                         'content': content[:100],
                         'created_at': msg.created_at.isoformat(),
                     }

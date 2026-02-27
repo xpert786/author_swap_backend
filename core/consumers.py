@@ -66,6 +66,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
     URL: ws://host/authorswap/ws/chat/<partner_id>/?token=<jwt_token>
     """
     async def connect(self):
+        print(f"DEBUG: WebSocket connecting for partner_id={self.scope['url_route']['kwargs'].get('partner_id')}")
         query_string = self.scope['query_string'].decode()
         query_params = parse_qs(query_string)
         token = query_params.get('token', [None])[0]
@@ -78,27 +79,29 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 access_token = AccessToken(token)
                 self.user_id = access_token['user_id']
                 self.user = await self.get_user(self.user_id)
-            except Exception:
-                pass
+                print(f"DEBUG: Authenticated user_id={self.user_id}")
+            except Exception as e:
+                print(f"DEBUG: Token authentication failed: {e}")
 
         if self.user_id and self.partner_id:
-            # Check if user can chat with partner
-            can_chat = await self.check_can_chat(self.user_id, self.partner_id)
-            if not can_chat:
+            try:
+                # Create a deterministic room name for the two users
+                uid1 = min(int(self.user_id), int(self.partner_id))
+                uid2 = max(int(self.user_id), int(self.partner_id))
+                self.room_group_name = f'chat_{uid1}_{uid2}'
+                print(f"DEBUG: Room name: {self.room_group_name}")
+
+                await self.channel_layer.group_add(
+                    self.room_group_name,
+                    self.channel_name
+                )
+                await self.accept()
+                print(f"DEBUG: WebSocket accepted")
+            except Exception as e:
+                print(f"DEBUG: WebSocket accept error: {e}")
                 await self.close()
-                return
-
-            # Create a deterministic room name for the two users
-            uid1 = min(int(self.user_id), int(self.partner_id))
-            uid2 = max(int(self.user_id), int(self.partner_id))
-            self.room_group_name = f'chat_{uid1}_{uid2}'
-
-            await self.channel_layer.group_add(
-                self.room_group_name,
-                self.channel_name
-            )
-            await self.accept()
         else:
+            print(f"DEBUG: Connection rejected: user_id={self.user_id}, partner_id={self.partner_id}")
             await self.close()
 
     @database_sync_to_async
@@ -108,29 +111,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
         except User.DoesNotExist:
             return None
 
-    @database_sync_to_async
-    def check_can_chat(self, user1_id, user2_id):
-        try:
-            user1 = User.objects.get(id=user1_id)
-            user2 = User.objects.get(id=user2_id)
-            
-            # Check if they are friends
-            profile1 = Profile.objects.filter(user=user1).first()
-            profile2 = Profile.objects.filter(user=user2).first()
-            if profile1 and profile2 and profile1.friends.filter(id=profile2.id).exists():
-                return True
-            
-            # Check if they are swap partners (any swap relationship, excluding rejected)
-            is_partner = SwapRequest.objects.filter(
-                (Q(requester=user1) & Q(slot__user=user2)) |
-                (Q(requester=user2) & Q(slot__user=user1))
-            ).exclude(status='rejected').exists()
-            
-            return is_partner
-        except Exception:
-            return False
-
     async def disconnect(self, close_code):
+        print(f"DEBUG: WebSocket disconnected code={close_code}")
         if hasattr(self, 'room_group_name'):
             await self.channel_layer.group_discard(
                 self.room_group_name,
@@ -138,6 +120,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             )
 
     async def receive(self, text_data):
+        print(f"DEBUG: Received WebSocket data: {text_data}")
         data = json.loads(text_data)
         msg_type = data.get('type', 'chat')
 
@@ -156,18 +139,23 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 # Save message to database
                 message = await self.save_message(self.user_id, self.partner_id, message_text)
                 
-                # Send message to room group
-                await self.channel_layer.group_send(
-                    self.room_group_name,
-                    {
-                        'type': 'chat_message',
-                        'message': message_text,
-                        'sender_id': self.user_id,
-                        'created_at': message.created_at.isoformat()
-                    }
-                )
+                if message:
+                    print(f"DEBUG: Message saved ID={message.id}")
+                    # Send message to room group
+                    await self.channel_layer.group_send(
+                        self.room_group_name,
+                        {
+                            'type': 'chat_message',
+                            'message': message_text,
+                            'sender_id': self.user_id,
+                            'created_at': message.created_at.isoformat()
+                        }
+                    )
+                else:
+                    print(f"DEBUG: Failed to save message")
 
     async def chat_message(self, event):
+        print(f"DEBUG: Broadcasting message: {event['message']}")
         # Format for frontend: type 'chat' as expected by CommunicationTools.jsx
         await self.send(text_data=json.dumps({
             'type': 'chat',
@@ -187,6 +175,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
     @database_sync_to_async
     def save_message(self, sender_id, receiver_id, text):
-        sender = User.objects.get(id=sender_id)
-        receiver = User.objects.get(id=receiver_id)
-        return ChatMessage.objects.create(sender=sender, recipient=receiver, content=text)
+        try:
+            sender = User.objects.get(id=sender_id)
+            receiver = User.objects.get(id=receiver_id)
+            return ChatMessage.objects.create(sender=sender, recipient=receiver, content=text)
+        except Exception as e:
+            print(f"DEBUG: save_message error: {e}")
+            return None
