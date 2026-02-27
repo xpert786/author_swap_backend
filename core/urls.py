@@ -7,6 +7,7 @@ from .views import (
     MyPotentialBooksView, SwapPartnerDetailView, RecentSwapHistoryView,
     SwapManagementListView, AcceptSwapView, RejectSwapView, RestoreSwapView,
     SwapHistoryDetailView, TrackMySwapView, CancelSwapView,
+    ConversationListView, ChatHistoryView, MySwapPartnersView, ComposePartnerListView,
 )
 from .ui_views import SlotExploreView, SlotDetailsView, SwapArrangementView
 
@@ -43,4 +44,10 @@ urlpatterns = [
     path('slots/explore/', SlotExploreView.as_view(), name='slots-explore'),
     path('slots/<int:pk>/details/', SlotDetailsView.as_view(), name='slots-details'),
     path('swaps/<int:pk>/arrangement/', SwapArrangementView.as_view(), name='swaps-arrangement'),
+    
+    # --- Chat APIs ---
+    path('chat/conversations/', ConversationListView.as_view(), name='chat-conversations'),
+    path('chat/history/<int:receiver_id>/', ChatHistoryView.as_view(), name='chat-history'),
+    path('chat/compose/', ComposePartnerListView.as_view(), name='chat-compose'),
+    path('swap-partners/my/', MySwapPartnersView.as_view(), name='my-swap-partners'),
 ]

@@ -790,9 +790,103 @@ class CancelSwapView(APIView):
         swap.rejection_reason = 'Cancelled by requester.'
         swap.rejected_at = tz.now()
         swap.save()
-
         return Response({
             "detail": "Swap request cancelled successfully.",
             "swap_id": swap.id,
             "status": swap.status,
         })
+
+from django.db.models import Q
+from django.contrib.auth import get_user_model
+User = get_user_model()
+from .models import ChatMessage, SwapRequest
+from .serializers import ChatMessageSerializer, ConversationPartnerSerializer
+
+class ConversationListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        
+        # Get users who have exchanged messages with current user
+        message_users = User.objects.filter(
+            Q(sent_messages__receiver=user) | 
+            Q(received_messages__sender=user)
+        ).distinct()
+        
+        serializer = ConversationPartnerSerializer(message_users, many=True, context={'request': request})
+        return Response(serializer.data)
+
+class ComposePartnerListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        
+        # 1. Get all swap partners (eligible to chat)
+        swap_requests = SwapRequest.objects.filter(
+            (Q(requester=user) | Q(slot__user=user))
+        ).exclude(status='rejected')
+        
+        eligible_user_ids = set()
+        for sr in swap_requests:
+            if sr.requester == user:
+                eligible_user_ids.add(sr.slot.user_id)
+            else:
+                eligible_user_ids.add(sr.requester_id)
+        
+        # 2. Get user IDs who ALREADY have a conversation
+        chatted_user_ids = set(User.objects.filter(
+            Q(sent_messages__receiver=user) | 
+            Q(received_messages__sender=user)
+        ).values_list('id', flat=True).distinct())
+        
+        # 3. Filter: eligible minus chatted
+        compose_user_ids = eligible_user_ids - chatted_user_ids
+        
+        compose_users = User.objects.filter(id__in=compose_user_ids)
+        
+        serializer = ConversationPartnerSerializer(compose_users, many=True, context={'request': request})
+        return Response(serializer.data)
+
+class MySwapPartnersView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        
+        # Get swap partners (any swap relationship, excluding rejected)
+        swap_requests = SwapRequest.objects.filter(
+            (Q(requester=user) | Q(slot__user=user))
+        ).exclude(status='rejected')
+        
+        partner_users = []
+        for sr in swap_requests:
+            if sr.requester == user:
+                partner_users.append(sr.slot.user)
+            else:
+                partner_users.append(sr.requester)
+        
+        # Unique
+        partner_users = list(set(partner_users))
+        
+        serializer = ConversationPartnerSerializer(partner_users, many=True, context={'request': request})
+        return Response(serializer.data)
+
+class ChatHistoryView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, receiver_id):
+        user = request.user
+        try:
+            receiver = User.objects.get(id=receiver_id)
+        except User.DoesNotExist:
+            return Response({"detail": "User not found."}, status=status.HTTP_404_NOT_FOUND)
+            
+        messages = ChatMessage.objects.filter(
+            (Q(sender=user) & Q(receiver=receiver)) |
+            (Q(sender=receiver) & Q(receiver=user))
+        ).order_by('created_at')
+        
+        serializer = ChatMessageSerializer(messages, many=True)
+        return Response(serializer.data)

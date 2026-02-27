@@ -214,3 +214,18 @@ class Notification(models.Model):
 
     def __str__(self):
         return f"{self.title} for {self.recipient.username}"
+
+
+class ChatMessage(models.Model):
+    sender = models.ForeignKey(User, on_delete=models.CASCADE, related_name='sent_messages')
+    receiver = models.ForeignKey(User, on_delete=models.CASCADE, related_name='received_messages')
+    text = models.TextField()
+    is_file = models.BooleanField(default=False)
+    file = models.FileField(upload_to='chat_files/', blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['created_at']
+
+    def __str__(self):
+        return f"From {self.sender} to {self.receiver} at {self.created_at}"

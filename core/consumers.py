@@ -4,6 +4,14 @@ from urllib.parse import parse_qs
 from rest_framework_simplejwt.tokens import AccessToken
 from django.contrib.auth.models import AnonymousUser
 
+
+from channels.db import database_sync_to_async
+from django.contrib.auth import get_user_model
+from core.models import ChatMessage, Profile, SwapRequest
+from django.db.models import Q
+
+User = get_user_model()
+
 class NotificationConsumer(AsyncWebsocketConsumer):
     async def connect(self):
         query_string = self.scope['query_string'].decode()
@@ -15,6 +23,7 @@ class NotificationConsumer(AsyncWebsocketConsumer):
             try:
                 access_token = AccessToken(token)
                 self.user_id = access_token['user_id']
+                self.user = await self.get_user(self.user_id)
             except Exception:
                 pass
 
@@ -27,6 +36,13 @@ class NotificationConsumer(AsyncWebsocketConsumer):
             await self.accept()
         else:
             await self.close()
+
+    @database_sync_to_async
+    def get_user(self, user_id):
+        try:
+            return User.objects.get(id=user_id)
+        except User.DoesNotExist:
+            return None
 
     async def disconnect(self, close_code):
         if hasattr(self, 'group_name'):
@@ -42,3 +58,106 @@ class NotificationConsumer(AsyncWebsocketConsumer):
             'type': 'notification',
             'data': notification
         }))
+
+class ChatConsumer(AsyncWebsocketConsumer):
+    async def connect(self):
+        query_string = self.scope['query_string'].decode()
+        query_params = parse_qs(query_string)
+        token = query_params.get('token', [None])[0]
+        self.receiver_id = self.scope['url_route']['kwargs']['receiver_id']
+
+        self.user_id = None
+        if token:
+            try:
+                access_token = AccessToken(token)
+                self.user_id = access_token['user_id']
+                self.user = await self.get_user(self.user_id)
+            except Exception:
+                pass
+
+        if self.user_id:
+            # Check if user can chat with receiver
+            can_chat = await self.check_can_chat(self.user_id, self.receiver_id)
+            if not can_chat:
+                await self.close()
+                return
+
+            self.room_name = f'chat_{min(int(self.user_id), int(self.receiver_id))}_{max(int(self.user_id), int(self.receiver_id))}'
+            self.room_group_name = f'chat_{self.room_name}'
+
+            await self.channel_layer.group_add(
+                self.room_group_name,
+                self.channel_name
+            )
+            await self.accept()
+        else:
+            await self.close()
+
+    async def disconnect(self, close_code):
+        if hasattr(self, 'room_group_name'):
+            await self.channel_layer.group_discard(
+                self.room_group_name,
+                self.channel_name
+            )
+
+    async def receive(self, text_data):
+        data = json.loads(text_data)
+        message_text = data.get('message')
+        
+        if message_text:
+            # Save message to database
+            message = await self.save_message(self.user_id, self.receiver_id, message_text)
+            
+            # Send message to room group
+            await self.channel_layer.group_send(
+                self.room_group_name,
+                {
+                    'type': 'chat_message',
+                    'message': message_text,
+                    'sender_id': self.user_id,
+                    'created_at': message.created_at.isoformat()
+                }
+            )
+
+    async def chat_message(self, event):
+        await self.send(text_data=json.dumps({
+            'type': 'chat',
+            'message': event['message'],
+            'sender_id': event['sender_id'],
+            'created_at': event['created_at']
+        }))
+
+    @database_sync_to_async
+    def get_user(self, user_id):
+        try:
+            return User.objects.get(id=user_id)
+        except User.DoesNotExist:
+            return None
+
+    @database_sync_to_async
+    def check_can_chat(self, user1_id, user2_id):
+        try:
+            user1 = User.objects.get(id=user1_id)
+            user2 = User.objects.get(id=user2_id)
+            
+            # Check if they are friends
+            profile1 = Profile.objects.filter(user=user1).first()
+            profile2 = Profile.objects.filter(user=user2).first()
+            if profile1 and profile2 and profile1.friends.filter(id=profile2.id).exists():
+                return True
+            
+            # Check if they are swap partners (any swap relationship, excluding rejected)
+            is_partner = SwapRequest.objects.filter(
+                (Q(requester=user1) & Q(slot__user=user2)) |
+                (Q(requester=user2) & Q(slot__user=user1))
+            ).exclude(status='rejected').exists()
+            
+            return is_partner
+        except Exception:
+            return False
+
+    @database_sync_to_async
+    def save_message(self, sender_id, receiver_id, text):
+        sender = User.objects.get(id=sender_id)
+        receiver = User.objects.get(id=receiver_id)
+        return ChatMessage.objects.create(sender=sender, receiver=receiver, text=text)

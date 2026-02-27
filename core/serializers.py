@@ -741,3 +741,85 @@ class TrackMySwapSerializer(serializers.ModelSerializer):
             "instagram": profile.instagram_url or None,
             "twitter": profile.tiktok_url or None,
         }
+
+from django.db.models import Q
+from django.contrib.auth import get_user_model
+User = get_user_model()
+from .models import ChatMessage
+
+class ChatMessageSerializer(serializers.ModelSerializer):
+    sender_name = serializers.CharField(source='sender.username', read_only=True)
+    
+    class Meta:
+        model = ChatMessage
+        fields = ['id', 'sender', 'sender_name', 'receiver', 'text', 'is_file', 'file', 'created_at']
+
+class ConversationPartnerSerializer(serializers.ModelSerializer):
+    name = serializers.SerializerMethodField()
+    avatar = serializers.SerializerMethodField()
+    last_message = serializers.SerializerMethodField()
+    time = serializers.SerializerMethodField()
+
+    swap_status = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = ['id', 'username', 'name', 'avatar', 'last_message', 'time', 'swap_status']
+
+    def get_name(self, obj):
+        profile = obj.profiles.first()
+        if profile and profile.name:
+            return profile.name
+        return obj.username
+
+    def get_swap_status(self, obj):
+        request = self.context.get('request')
+        if not request:
+            return None
+        
+        swap = SwapRequest.objects.filter(
+            (Q(requester=request.user) & Q(slot__user=obj)) |
+            (Q(requester=obj) & Q(slot__user=request.user))
+        ).exclude(status='rejected').order_by('-created_at').first()
+        
+        return swap.status if swap else None
+
+    def get_avatar(self, obj):
+        profile = obj.profiles.first()
+        if profile and profile.profile_picture:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(profile.profile_picture.url)
+            return profile.profile_picture.url
+        return "https://randomuser.me/api/portraits/men/32.jpg"
+
+    def get_last_message(self, obj):
+        request = self.context.get('request')
+        if not request:
+            return None
+        
+        last_msg = ChatMessage.objects.filter(
+            (Q(sender=request.user) & Q(receiver=obj)) |
+            (Q(sender=obj) & Q(receiver=request.user))
+        ).order_by('-created_at').first()
+        
+        return last_msg.text if last_msg else "No messages yet"
+
+    def get_time(self, obj):
+        request = self.context.get('request')
+        if not request:
+            return None
+        
+        last_msg = ChatMessage.objects.filter(
+            (Q(sender=request.user) & Q(receiver=obj)) |
+            (Q(sender=obj) & Q(receiver=request.user))
+        ).order_by('-created_at').first()
+        
+        if last_msg:
+            from django.utils import timezone
+            now = timezone.now().date()
+            target = last_msg.created_at.date()
+            if target == now:
+                return last_msg.created_at.strftime("%I:%M %p")
+            return target.strftime("%d %b")
+        return ""
