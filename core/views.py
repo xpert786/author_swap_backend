@@ -583,6 +583,17 @@ class SwapRequestListView(APIView):
                     initial_status = 'confirmed'
 
             swap_req = serializer.save(requester=request.user, status=initial_status, book=book)
+            
+            # MailerLite Notification
+            if initial_status == 'pending':
+                from core.services.mailerlite_service import send_swap_request_notification
+                try:
+                    # Notify the receiving author (slot owner)
+                    send_swap_request_notification(slot.user.email)
+                except Exception:
+                    pass
+                    
+
             response_data = SwapRequestSerializer(swap_req).data
             response_data['detail'] = f"Swap request sent successfully! {request.user.username} has requested the {slot.send_date} slot."
             return Response(response_data, status=status.HTTP_201_CREATED)
@@ -689,6 +700,16 @@ class RequestSwapPlacementView(APIView):
             max_partners_acknowledged=max_partners_acknowledged,
             message=message
         )
+        
+        # MailerLite Notification
+        if initial_status == 'pending':
+            from core.services.mailerlite_service import send_swap_request_notification
+            try:
+                # Notify the receiving author (slot owner)
+                send_swap_request_notification(slot.user.email)
+            except Exception:
+                pass
+
         
         response_data = SwapRequestSerializer(swap_req).data
         response_data['detail'] = f"Swap request sent successfully! You have requested the {slot.send_date} slot."
@@ -1472,3 +1493,35 @@ class AuthorDashboardView(APIView):
             "campaign_analytics": campaign_analytics,
             "quick_actions": quick_actions,
         })
+
+
+class AllSwapRequestsView(ListAPIView):
+    """
+    GET /api/all-swap-requests/
+    Returns all swap requests in the platform.
+    Can be filtered by status using ?status=pending,etc.
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        qs = SwapRequest.objects.all().order_by('-created_at')
+        status_filter = self.request.query_params.get('status')
+        if status_filter:
+            qs = qs.filter(status__iexact=status_filter)
+        return qs
+
+    def list(self, request, *args, **kwargs):
+        # We can reuse the SwapManagementSerializer or create a specialized one.
+        # But since the user wants just "all swap requests", we'll just serialize it directly.
+        from core.serializers import SwapManagementSerializer
+        queryset = self.get_queryset()
+        
+        # simple pagination could be used here but returning all if small
+        # For a full platform we should use pagination.
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = SwapManagementSerializer(page, many=True, context={'request': request})
+            return self.get_paginated_response(serializer.data)
+
+        serializer = SwapManagementSerializer(queryset, many=True, context={'request': request})
+        return Response(serializer.data)
