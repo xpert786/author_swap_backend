@@ -362,6 +362,9 @@ class SwapManagementSerializer(serializers.ModelSerializer):
         # Show as 'sending' if the swap is pending and the current user is the requester
         if request and obj.status == 'pending' and obj.requester_id == request.user.id:
             return 'sending'
+        # Map legacy 'confirmed' status to 'completed' in the API output
+        if obj.status == 'confirmed':
+            return 'completed'
         return obj.status
 
     def get_partner_user(self, obj):
