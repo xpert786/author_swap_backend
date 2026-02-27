@@ -8,6 +8,13 @@ from django.core.mail import send_mail
 from django.conf import settings
 from .serializers import LoginSerializer, SignupSerializer, ForgotPasswordSerializer, VerifyOTPSerializer, ResetPasswordSerializer, AccountBasicsSerializer, OnlinePresenceSerializer, UserProfileReviewSerializer, EditPenNameSerializer
 from .models import PasswordResetToken, UserProfile, PRIMARY_GENRE_CHOICES, GENRE_SUBGENRE_MAPPING, AUDIENCE_TAG_CHOICES
+try:
+    from google.oauth2 import id_token
+    from google.auth.transport import requests as google_requests
+except ImportError:
+    id_token = None
+    google_requests = None
+
 
 User = get_user_model()
 
@@ -322,11 +329,14 @@ class GoogleOAuthView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        if id_token is None:
+            return Response(
+                {"error": "Google authentication library not installed on the server. Please run 'pip install google-auth requests'"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
         # Verify the Google ID token
         try:
-            from google.oauth2 import id_token
-            from google.auth.transport import requests as google_requests
-
             google_client_id = settings.GOOGLE_OAUTH_CLIENT_ID
             id_info = id_token.verify_oauth2_token(
                 id_token_str,
