@@ -604,8 +604,23 @@ class SwapRequestListView(APIView):
         if slot_id:
             try:
                 slot = NewsletterSlot.objects.get(id=slot_id)
-                serializer = SlotExploreSerializer(slot)
-                return Response(serializer.data)
+                serializer = SlotExploreSerializer(slot, context={'request': request})
+                response_data = dict(serializer.data)
+                
+                # Fetch the current user's active books to allow them to pick one to promote
+                from core.models import Book
+                user_books = Book.objects.filter(user=request.user, is_active=True)
+                books_data = []
+                for book in user_books:
+                    cover_url = request.build_absolute_uri(book.book_cover.url) if book.book_cover else None
+                    books_data.append({
+                        "id": book.id,
+                        "title": book.title,
+                        "cover": cover_url
+                    })
+                
+                response_data['my_books'] = books_data
+                return Response(response_data)
             except NewsletterSlot.DoesNotExist:
                 return Response({"detail": "Slot not found."}, status=status.HTTP_404_NOT_FOUND)
                 
