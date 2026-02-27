@@ -919,14 +919,30 @@ class SubscriberGrowthSerializer(serializers.ModelSerializer):
 
 class CampaignAnalyticSerializer(serializers.ModelSerializer):
     formatted_date = serializers.SerializerMethodField()
+    badges = serializers.SerializerMethodField()
+    subtitle = serializers.SerializerMethodField()
 
     class Meta:
         model = CampaignAnalytic
         fields = '__all__'
 
     def get_formatted_date(self, obj):
-        return obj.date.strftime("%B %d, %Y")
+        return obj.date.strftime("%B %-d, %Y")
+        
+    def get_badges(self, obj):
+        name_lower = obj.name.lower()
+        badges = []
+        if 'romance special' in name_lower or 'swap' in name_lower:
+            badges.append('Swap')
+        if 'coastal hearts' in name_lower or 'promo' in name_lower:
+            badges.append('Promo')
+        return badges
 
+    def get_subtitle(self, obj):
+        name_lower = obj.name.lower()
+        if 'romance special' in name_lower:
+            return 'Swap with Amanda Johnson'
+        return None
 
 # =====================================================================
 # EMAIL / COMMUNICATION TOOLS

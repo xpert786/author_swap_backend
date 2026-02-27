@@ -68,11 +68,11 @@ class SlotDetailsSerializer(serializers.ModelSerializer):
         ]
 
     def get_current_partners_count(self, obj):
-        return obj.swap_requests.filter(status__in=['confirmed', 'verified']).count()
+        return obj.swap_requests.filter(status__in=['confirmed', 'verified', 'completed', 'sending']).count()
 
     def get_swap_partners(self, obj):
-        requests = obj.swap_requests.filter(status__in=['confirmed', 'verified'])
-        return SlotPartnerSerializer(requests, many=True).data
+        requests = obj.swap_requests.filter(status__in=['confirmed', 'verified', 'completed', 'sending'])
+        return SlotPartnerSerializer(requests, many=True, context=self.context).data
 
 class SwapArrangementSerializer(serializers.ModelSerializer):
     """Serializer for Figma Screen 2 - Swap Arrangement Modal"""
