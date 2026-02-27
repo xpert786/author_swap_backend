@@ -9,7 +9,9 @@ from .views import (
     SwapHistoryDetailView, TrackMySwapView, CancelSwapView, AuthorReputationView,
     SubscriberVerificationView, ConnectMailerLiteView, SubscriberAnalyticsView,
     RequestSwapPlacementView, AuthorDashboardView, AudienceSizeView,
-    AllSwapRequestsView
+    AllSwapRequestsView,
+    EmailListView, ComposeEmailView, EmailDetailView, EmailActionView,
+    ChatAuthorListView, ConversationListView, ChatHistoryView, SendMessageView
 )
 from .ui_views import SlotExploreView, SlotDetailsView, SwapArrangementView
 
@@ -60,4 +62,16 @@ urlpatterns = [
     
     # --- Admin / Global ---
     path('all-swap-requests/', AllSwapRequestsView.as_view(), name='all-swap-requests'),
+    
+    # --- Communication Tools / Email ---
+    path('emails/', EmailListView.as_view(), name='email-list'),
+    path('emails/compose/', ComposeEmailView.as_view(), name='compose-email'),
+    path('emails/action/', EmailActionView.as_view(), name='email-action'),
+    path('emails/<int:pk>/', EmailDetailView.as_view(), name='email-detail'),
+    
+    # --- Communication Tools / Chat ---
+    path('chat/authors/', ChatAuthorListView.as_view(), name='chat-author-list'),
+    path('chat/conversations/', ConversationListView.as_view(), name='conversation-list'),
+    path('chat/<int:user_id>/', ChatHistoryView.as_view(), name='chat-history'),
+    path('chat/<int:user_id>/send/', SendMessageView.as_view(), name='send-message'),
 ]

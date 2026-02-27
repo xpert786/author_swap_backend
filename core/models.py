@@ -286,3 +286,58 @@ class Notification(models.Model):
 
     def __str__(self):
         return f"{self.title} for {self.recipient.username}"
+
+
+class Email(models.Model):
+    """
+    Internal email/messaging system for Communication Tools.
+    Authors can send emails to other authors on the platform.
+    """
+    FOLDER_CHOICES = [
+        ('inbox', 'Inbox'),
+        ('snoozed', 'Snoozed'),
+        ('sent', 'Sent'),
+        ('drafts', 'Drafts'),
+        ('spam', 'Spam'),
+        ('trash', 'Trash'),
+    ]
+
+    sender = models.ForeignKey(User, on_delete=models.CASCADE, related_name='sent_emails')
+    recipient = models.ForeignKey(User, on_delete=models.CASCADE, related_name='received_emails')
+    subject = models.CharField(max_length=255)
+    body = models.TextField()
+    folder = models.CharField(max_length=20, choices=FOLDER_CHOICES, default='inbox')
+    is_read = models.BooleanField(default=False)
+    is_starred = models.BooleanField(default=False)
+    is_draft = models.BooleanField(default=False)
+    parent_email = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, blank=True, related_name='replies')
+    attachment = models.FileField(upload_to='email_attachments/', blank=True, null=True)
+    sent_at = models.DateTimeField(null=True, blank=True)
+    snoozed_until = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.subject} — {self.sender.username} → {self.recipient.username}"
+
+
+class ChatMessage(models.Model):
+    """
+    Real-time chat messages between authors.
+    Used in the Communication Tools > Message tab.
+    """
+    sender = models.ForeignKey(User, on_delete=models.CASCADE, related_name='sent_messages')
+    recipient = models.ForeignKey(User, on_delete=models.CASCADE, related_name='received_messages')
+    content = models.TextField()
+    attachment = models.FileField(upload_to='chat_attachments/', blank=True, null=True)
+    is_read = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['created_at']
+
+    def __str__(self):
+        return f"{self.sender.username} → {self.recipient.username}: {self.content[:40]}"

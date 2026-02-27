@@ -838,7 +838,7 @@ class SwapManagementListView(APIView):
         'sending': ['sending'],
         'rejected': ['rejected'],
         'scheduled': ['scheduled'],
-        'completed': ['completed', 'verified'],
+        'completed': ['completed', 'verified', 'confirmed'],
     }
 
     def get(self, request):
@@ -854,9 +854,16 @@ class SwapManagementListView(APIView):
         ).order_by('-created_at')
 
         # Tab filtering
-        statuses = self.TAB_STATUS_MAP.get(tab)
-        if statuses:
-            qs = qs.filter(status__in=statuses)
+        if tab == 'pending':
+            qs = qs.filter(slot__user=user, status='pending')
+        elif tab == 'sending':
+            qs = qs.filter(requester=user, status='pending')
+        elif tab == 'rejected':
+            qs = qs.filter(status='rejected')
+        elif tab == 'scheduled':
+            qs = qs.filter(status='scheduled')
+        elif tab == 'completed':
+            qs = qs.filter(status__in=['completed', 'verified', 'confirmed'])
 
         # Search by author name, book title, or date
         if search:
@@ -882,11 +889,11 @@ class SwapManagementListView(APIView):
         all_qs = SwapRequest.objects.filter(Q(slot__user=user) | Q(requester=user))
         tab_counts = {
             'all': all_qs.count(),
-            'pending': all_qs.filter(status='pending').count(),
-            'sending': all_qs.filter(status='sending').count(),
+            'pending': all_qs.filter(slot__user=user, status='pending').count(),
+            'sending': all_qs.filter(requester=user, status='pending').count(),
             'rejected': all_qs.filter(status='rejected').count(),
             'scheduled': all_qs.filter(status='scheduled').count(),
-            'completed': all_qs.filter(status__in=['completed', 'verified']).count(),
+            'completed': all_qs.filter(status__in=['completed', 'verified', 'confirmed']).count(),
         }
 
         return Response({
@@ -913,7 +920,8 @@ class AcceptSwapView(APIView):
         if swap.status not in ['pending']:
             return Response({"detail": f"Cannot accept a swap in '{swap.status}' state."}, status=status.HTTP_400_BAD_REQUEST)
 
-        swap.status = 'confirmed'
+        # Update status directly to completed when accepted
+        swap.status = 'completed'
         swap.save()
 
         # MailerLite: move from Pending → Approved group
@@ -1534,3 +1542,613 @@ class AllSwapRequestsView(ListAPIView):
 
         serializer = SwapManagementSerializer(queryset, many=True, context={'request': request})
         return Response(serializer.data)
+
+
+# =====================================================================
+# EMAIL / COMMUNICATION TOOLS
+# =====================================================================
+from core.models import Email
+from core.serializers import EmailListSerializer, EmailDetailSerializer, ComposeEmailSerializer
+
+
+class EmailListView(APIView):
+    """
+    GET /api/emails/?folder=inbox&search=query
+    Returns emails for the current user grouped by folder.
+    Also returns folder counts for badge numbers.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        folder = request.query_params.get('folder', 'inbox').lower()
+        search = request.query_params.get('search', '').strip()
+
+        # Build base queryset based on folder
+        if folder == 'sent':
+            qs = Email.objects.filter(sender=user, folder='sent', is_draft=False)
+        elif folder == 'drafts':
+            qs = Email.objects.filter(sender=user, is_draft=True)
+        else:
+            qs = Email.objects.filter(recipient=user, folder=folder)
+
+        # Search filter
+        if search:
+            qs = qs.filter(
+                Q(subject__icontains=search) |
+                Q(body__icontains=search) |
+                Q(sender__profiles__name__icontains=search) |
+                Q(sender__username__icontains=search) |
+                Q(recipient__profiles__name__icontains=search) |
+                Q(recipient__username__icontains=search)
+            ).distinct()
+
+        qs = qs.select_related('sender', 'recipient').order_by('-created_at')
+
+        serializer = EmailListSerializer(qs, many=True, context={'request': request})
+
+        # Folder counts
+        inbox_count = Email.objects.filter(recipient=user, folder='inbox', is_read=False).count()
+        snoozed_count = Email.objects.filter(recipient=user, folder='snoozed').count()
+        sent_count = Email.objects.filter(sender=user, folder='sent', is_draft=False).count()
+        drafts_count = Email.objects.filter(sender=user, is_draft=True).count()
+        spam_count = Email.objects.filter(recipient=user, folder='spam').count()
+        trash_count = Email.objects.filter(recipient=user, folder='trash').count()
+
+        return Response({
+            'folder': folder,
+            'folder_counts': {
+                'inbox': inbox_count,
+                'snoozed': snoozed_count,
+                'sent': sent_count,
+                'drafts': drafts_count,
+                'spam': spam_count,
+                'trash': trash_count,
+            },
+            'results': serializer.data,
+        })
+
+
+class ComposeEmailView(APIView):
+    """
+    POST /api/emails/compose/
+    Compose and send an email (or save as draft).
+    Also sends a real email via SMTP if not a draft.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = ComposeEmailSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        data = serializer.validated_data
+        User = request.user.__class__
+
+        # Resolve recipient
+        recipient = None
+        if data.get('recipient_id'):
+            try:
+                recipient = User.objects.get(id=data['recipient_id'])
+            except User.DoesNotExist:
+                return Response({"detail": "Recipient not found."}, status=status.HTTP_404_NOT_FOUND)
+        elif data.get('recipient_username'):
+            try:
+                recipient = User.objects.get(username=data['recipient_username'])
+            except User.DoesNotExist:
+                return Response({"detail": f"User '{data['recipient_username']}' not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        is_draft = data.get('is_draft', False)
+        parent_email = None
+        if data.get('parent_email_id'):
+            parent_email = Email.objects.filter(id=data['parent_email_id']).first()
+
+        from django.utils import timezone
+
+        email_obj = Email.objects.create(
+            sender=request.user,
+            recipient=recipient,
+            subject=data['subject'],
+            body=data['body'],
+            is_draft=is_draft,
+            folder='drafts' if is_draft else 'sent',
+            parent_email=parent_email,
+            sent_at=None if is_draft else timezone.now(),
+        )
+
+        # Handle file attachment
+        if request.FILES.get('attachment'):
+            email_obj.attachment = request.FILES['attachment']
+            email_obj.save()
+
+        # If not draft, also create an inbox copy for the recipient
+        if not is_draft:
+            Email.objects.create(
+                sender=request.user,
+                recipient=recipient,
+                subject=data['subject'],
+                body=data['body'],
+                folder='inbox',
+                is_draft=False,
+                parent_email=parent_email,
+                sent_at=email_obj.sent_at,
+                attachment=email_obj.attachment,
+            )
+
+            # Send real email via SMTP
+            try:
+                from django.core.mail import send_mail
+                from django.conf import settings
+
+                sender_profile = request.user.profiles.first()
+                sender_name = sender_profile.name if sender_profile else request.user.username
+
+                send_mail(
+                    subject=data['subject'],
+                    message=data['body'],
+                    from_email=settings.DEFAULT_FROM_EMAIL,
+                    recipient_list=[recipient.email],
+                    fail_silently=True,
+                    html_message=f"""
+                    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                        <div style="background: #2D6A4F; padding: 20px; color: white; border-radius: 8px 8px 0 0;">
+                            <h2 style="margin: 0;">AuthorSwap Message</h2>
+                        </div>
+                        <div style="padding: 20px; background: #f9f9f9; border: 1px solid #e0e0e0;">
+                            <p style="color: #666; margin-bottom: 5px;">From: <strong>{sender_name}</strong></p>
+                            <h3 style="margin-top: 0;">{data['subject']}</h3>
+                            <div style="background: white; padding: 15px; border-radius: 6px; border: 1px solid #eee;">
+                                {data['body']}
+                            </div>
+                            <p style="color: #999; font-size: 12px; margin-top: 20px;">
+                                This message was sent through AuthorSwap Communication Tools.
+                                Log in to your dashboard to reply.
+                            </p>
+                        </div>
+                    </div>
+                    """,
+                )
+            except Exception:
+                pass  # Email sending is non-critical
+
+            # Create a notification for the recipient
+            try:
+                sender_profile = request.user.profiles.first()
+                sender_name = sender_profile.name if sender_profile else request.user.username
+                Notification.objects.create(
+                    recipient=recipient,
+                    title=f"New Email from {sender_name}",
+                    message=f"{sender_name} sent you a message: \"{data['subject']}\"",
+                    badge='NEW',
+                    action_url=f'/communication-tools/email/{email_obj.id}/',
+                )
+            except Exception:
+                pass
+
+        result = EmailDetailSerializer(email_obj, context={'request': request}).data
+        result['detail'] = "Draft saved successfully." if is_draft else "Email sent successfully."
+        return Response(result, status=status.HTTP_201_CREATED)
+
+
+class EmailDetailView(APIView):
+    """
+    GET    /api/emails/<id>/     — Read a single email (marks as read)
+    PATCH  /api/emails/<id>/     — Update (star, move folder, mark read/unread)
+    DELETE /api/emails/<id>/     — Move to trash or permanently delete
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get_email(self, pk, user):
+        try:
+            return Email.objects.get(
+                Q(pk=pk),
+                Q(sender=user) | Q(recipient=user)
+            )
+        except Email.DoesNotExist:
+            return None
+
+    def get(self, request, pk):
+        email = self.get_email(pk, request.user)
+        if not email:
+            return Response({"detail": "Email not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        # Mark as read if recipient is viewing
+        if email.recipient_id == request.user.id and not email.is_read:
+            email.is_read = True
+            email.save(update_fields=['is_read'])
+
+        serializer = EmailDetailSerializer(email, context={'request': request})
+        return Response(serializer.data)
+
+    def patch(self, request, pk):
+        email = self.get_email(pk, request.user)
+        if not email:
+            return Response({"detail": "Email not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        # Update allowed fields
+        if 'is_starred' in request.data:
+            email.is_starred = request.data['is_starred']
+        if 'is_read' in request.data:
+            email.is_read = request.data['is_read']
+        if 'folder' in request.data:
+            email.folder = request.data['folder']
+        if 'snoozed_until' in request.data:
+            email.snoozed_until = request.data.get('snoozed_until')
+            if email.snoozed_until:
+                email.folder = 'snoozed'
+
+        email.save()
+        serializer = EmailDetailSerializer(email, context={'request': request})
+        return Response(serializer.data)
+
+    def delete(self, request, pk):
+        email = self.get_email(pk, request.user)
+        if not email:
+            return Response({"detail": "Email not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if email.folder == 'trash':
+            # Already in trash → permanently delete
+            email.delete()
+            return Response({"detail": "Email permanently deleted."}, status=status.HTTP_204_NO_CONTENT)
+        else:
+            # Move to trash
+            email.folder = 'trash'
+            email.save(update_fields=['folder'])
+            return Response({"detail": "Email moved to trash."})
+
+
+class EmailActionView(APIView):
+    """
+    POST /api/emails/action/
+    Bulk actions: move to folder, mark as read/unread, star/unstar, delete.
+    Body: { "email_ids": [1,2,3], "action": "move_to_trash" | "mark_read" | "mark_unread" | "star" | "unstar" | "move_to_inbox" | "move_to_spam" | "delete" }
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        email_ids = request.data.get('email_ids', [])
+        action = request.data.get('action', '')
+
+        if not email_ids or not action:
+            return Response({"detail": "email_ids and action are required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        emails = Email.objects.filter(
+            Q(id__in=email_ids),
+            Q(sender=request.user) | Q(recipient=request.user)
+        )
+
+        if action == 'mark_read':
+            emails.update(is_read=True)
+        elif action == 'mark_unread':
+            emails.update(is_read=False)
+        elif action == 'star':
+            emails.update(is_starred=True)
+        elif action == 'unstar':
+            emails.update(is_starred=False)
+        elif action == 'move_to_trash':
+            emails.update(folder='trash')
+        elif action == 'move_to_inbox':
+            emails.update(folder='inbox')
+        elif action == 'move_to_spam':
+            emails.update(folder='spam')
+        elif action == 'delete':
+            count = emails.count()
+            emails.delete()
+            return Response({"detail": f"{count} email(s) permanently deleted."})
+        else:
+            return Response({"detail": f"Unknown action: '{action}'."}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response({"detail": f"Action '{action}' applied to {emails.count()} email(s)."})
+
+
+# =====================================================================
+# CHAT / MESSAGING SYSTEM
+# =====================================================================
+from core.models import ChatMessage
+from core.serializers import ChatMessageSerializer, ConversationListSerializer
+
+
+class ChatAuthorListView(APIView):
+    """
+    GET /api/chat/authors/
+    Returns list of authors from slots/explore that the current user can chat with.
+    Each author includes their profile info.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        search = request.query_params.get('search', '').strip()
+
+        # Get unique user IDs from all newsletter slots (same as slots/explore)
+        slot_user_ids = NewsletterSlot.objects.values_list('user_id', flat=True).distinct()
+
+        # Exclude current user
+        profiles = Profile.objects.filter(
+            user_id__in=slot_user_ids
+        ).exclude(user=request.user).select_related('user')
+
+        if search:
+            profiles = profiles.filter(
+                Q(name__icontains=search) |
+                Q(user__username__icontains=search)
+            )
+
+        # For each author, include unread message count
+        result = []
+        for profile in profiles:
+            unread = ChatMessage.objects.filter(
+                sender=profile.user, recipient=request.user, is_read=False
+            ).count()
+
+            # Get last message (if any)
+            last_msg = ChatMessage.objects.filter(
+                Q(sender=profile.user, recipient=request.user) |
+                Q(sender=request.user, recipient=profile.user)
+            ).order_by('-created_at').first()
+
+            profile_pic = None
+            if profile.profile_picture:
+                if hasattr(request, 'build_absolute_uri'):
+                    profile_pic = request.build_absolute_uri(profile.profile_picture.url)
+                else:
+                    profile_pic = profile.profile_picture.url
+
+            result.append({
+                'user_id': profile.user.id,
+                'username': profile.user.username,
+                'name': profile.name,
+                'profile_picture': profile_pic,
+                'location': profile.location,
+                'unread_count': unread,
+                'last_message': last_msg.content[:60] if last_msg else None,
+                'last_message_time': last_msg.created_at if last_msg else None,
+            })
+
+        # Sort by last_message_time (most recent first), then by name
+        result.sort(key=lambda x: x.get('last_message_time') or datetime.min, reverse=True)
+
+        return Response(result)
+
+
+class ConversationListView(APIView):
+    """
+    GET /api/chat/conversations/?search=query
+    Returns list of conversations the current user has (authors they've chatted with).
+    Each has: last message, unread count, profile info.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        search = request.query_params.get('search', '').strip()
+
+        # Find all unique users the current user has chatted with
+        sent_to_ids = ChatMessage.objects.filter(sender=user).values_list('recipient_id', flat=True).distinct()
+        received_from_ids = ChatMessage.objects.filter(recipient=user).values_list('sender_id', flat=True).distinct()
+        chat_partner_ids = set(sent_to_ids) | set(received_from_ids)
+
+        if not chat_partner_ids:
+            return Response([])
+
+        profiles = Profile.objects.filter(user_id__in=chat_partner_ids).select_related('user')
+
+        if search:
+            profiles = profiles.filter(
+                Q(name__icontains=search) |
+                Q(user__username__icontains=search)
+            )
+
+        from django.utils import timezone
+
+        conversations = []
+        for profile in profiles:
+            partner = profile.user
+
+            # Last message between the two users
+            last_msg = ChatMessage.objects.filter(
+                Q(sender=user, recipient=partner) |
+                Q(sender=partner, recipient=user)
+            ).order_by('-created_at').first()
+
+            # Unread count (messages FROM this partner that I haven't read)
+            unread = ChatMessage.objects.filter(
+                sender=partner, recipient=user, is_read=False
+            ).count()
+
+            profile_pic = None
+            if profile.profile_picture:
+                profile_pic = request.build_absolute_uri(profile.profile_picture.url)
+
+            # Format time
+            formatted_time = ""
+            if last_msg:
+                now = timezone.now().date()
+                msg_date = last_msg.created_at.date()
+                if msg_date == now:
+                    formatted_time = "Today"
+                elif (now - msg_date).days == 1:
+                    formatted_time = "Yesterday"
+                else:
+                    formatted_time = msg_date.strftime("%m/%d/%Y")
+
+            conversations.append({
+                'user_id': partner.id,
+                'username': partner.username,
+                'name': profile.name,
+                'profile_picture': profile_pic,
+                'location': profile.location,
+                'last_message': last_msg.content[:80] if last_msg else "",
+                'last_message_time': last_msg.created_at if last_msg else None,
+                'formatted_time': formatted_time,
+                'unread_count': unread,
+            })
+
+        # Sort: most recent conversation first
+        conversations.sort(key=lambda x: x.get('last_message_time') or datetime.min, reverse=True)
+
+        serializer = ConversationListSerializer(conversations, many=True)
+        return Response(serializer.data)
+
+
+class ChatHistoryView(APIView):
+    """
+    GET /api/chat/<user_id>/
+    Returns chat message history between the current user and the specified user.
+    Messages grouped by date with "Yesterday", "Today" labels.
+    Also marks all unread messages from the other user as read.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, user_id):
+        user = request.user
+
+        # Validate other user exists
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        try:
+            other_user = User.objects.get(id=user_id)
+        except User.DoesNotExist:
+            return Response({"detail": "User not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        # Fetch all messages between the two users
+        messages = ChatMessage.objects.filter(
+            Q(sender=user, recipient=other_user) |
+            Q(sender=other_user, recipient=user)
+        ).select_related('sender', 'recipient').order_by('created_at')
+
+        # Mark unread messages from the other user as read
+        ChatMessage.objects.filter(
+            sender=other_user, recipient=user, is_read=False
+        ).update(is_read=True)
+
+        # Group messages by date
+        from django.utils import timezone
+        now = timezone.now().date()
+        grouped = {}
+        for msg in messages:
+            msg_date = msg.created_at.date()
+            if msg_date == now:
+                label = "Today"
+            elif (now - msg_date).days == 1:
+                label = "Yesterday"
+            else:
+                label = msg_date.strftime("%B %d, %Y")
+
+            if label not in grouped:
+                grouped[label] = []
+            grouped[label].append(msg)
+
+        # Build response
+        result = []
+        for date_label, msgs in grouped.items():
+            result.append({
+                'date_label': date_label,
+                'messages': ChatMessageSerializer(msgs, many=True, context={'request': request}).data,
+            })
+
+        # Other user profile info
+        other_profile = other_user.profiles.first()
+        other_info = {
+            'user_id': other_user.id,
+            'username': other_user.username,
+            'name': other_profile.name if other_profile else other_user.username,
+            'profile_picture': request.build_absolute_uri(other_profile.profile_picture.url) if other_profile and other_profile.profile_picture else None,
+            'location': other_profile.location if other_profile else None,
+        }
+
+        return Response({
+            'partner': other_info,
+            'chat': result,
+        })
+
+
+class SendMessageView(APIView):
+    """
+    POST /api/chat/<user_id>/send/
+    Send a message to another user.
+    Body: { "content": "Hello!", "attachment": <file> (optional) }
+    Also pushes the message via WebSocket channel layer for real-time delivery.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, user_id):
+        user = request.user
+        content = request.data.get('content', '').strip()
+
+        if not content:
+            return Response({"detail": "Message content is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        try:
+            recipient = User.objects.get(id=user_id)
+        except User.DoesNotExist:
+            return Response({"detail": "Recipient not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if recipient.id == user.id:
+            return Response({"detail": "You cannot send a message to yourself."}, status=status.HTTP_400_BAD_REQUEST)
+
+        msg = ChatMessage.objects.create(
+            sender=user,
+            recipient=recipient,
+            content=content,
+        )
+
+        # Handle attachment
+        if request.FILES.get('attachment'):
+            msg.attachment = request.FILES['attachment']
+            msg.save()
+
+        # Push real-time notification via WebSocket
+        try:
+            from channels.layers import get_channel_layer
+            from asgiref.sync import async_to_sync
+            import json
+
+            channel_layer = get_channel_layer()
+            sender_profile = user.profiles.first()
+            sender_name = sender_profile.name if sender_profile else user.username
+
+            # Send to recipient's notification channel
+            async_to_sync(channel_layer.group_send)(
+                f'user_{recipient.id}_notifications',
+                {
+                    'type': 'send_notification',
+                    'notification': {
+                        'type': 'chat_message',
+                        'message_id': msg.id,
+                        'sender_id': user.id,
+                        'sender_name': sender_name,
+                        'content': content[:100],
+                        'created_at': msg.created_at.isoformat(),
+                    }
+                }
+            )
+
+            # Also send to the dedicated chat channel (if recipient is in the chat room)
+            async_to_sync(channel_layer.group_send)(
+                f'chat_{min(user.id, recipient.id)}_{max(user.id, recipient.id)}',
+                {
+                    'type': 'chat_message',
+                    'message': ChatMessageSerializer(msg, context={'request': request}).data,
+                }
+            )
+        except Exception:
+            pass  # WebSocket push is non-critical
+
+        # Create in-app notification
+        try:
+            sender_profile = user.profiles.first()
+            sender_name = sender_profile.name if sender_profile else user.username
+            Notification.objects.create(
+                recipient=recipient,
+                title=f"New message from {sender_name}",
+                message=content[:100],
+                badge='NEW',
+                action_url=f'/communication-tools/messages/{user.id}/',
+            )
+        except Exception:
+            pass
+
+        serializer = ChatMessageSerializer(msg, context={'request': request})
+        return Response(serializer.data, status=status.HTTP_201_CREATED)

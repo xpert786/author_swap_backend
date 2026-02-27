@@ -326,6 +326,7 @@ class SwapManagementSerializer(serializers.ModelSerializer):
     Serializer for the Swap Management page (Figma).
     Returns all data needed for each swap card.
     """
+    status = serializers.SerializerMethodField()
     # Author info (the person who SENT the request)
     author_name = serializers.SerializerMethodField()
     author_genre_label = serializers.SerializerMethodField()
@@ -355,6 +356,13 @@ class SwapManagementSerializer(serializers.ModelSerializer):
             'scheduled_label', 'scheduled_date',
             'preferred_placement', 'max_partners_acknowledged',
         ]
+
+    def get_status(self, obj):
+        request = self.context.get('request')
+        # Show as 'sending' if the swap is pending and the current user is the requester
+        if request and obj.status == 'pending' and obj.requester_id == request.user.id:
+            return 'sending'
+        return obj.status
 
     def get_partner_user(self, obj):
         request = self.context.get('request')
@@ -910,3 +918,198 @@ class CampaignAnalyticSerializer(serializers.ModelSerializer):
 
     def get_formatted_date(self, obj):
         return obj.date.strftime("%B %d, %Y")
+
+
+# =====================================================================
+# EMAIL / COMMUNICATION TOOLS
+# =====================================================================
+from core.models import Email
+
+
+class EmailListSerializer(serializers.ModelSerializer):
+    """
+    Lightweight serializer for the email list view (inbox sidebar).
+    """
+    sender_name = serializers.SerializerMethodField()
+    sender_profile_picture = serializers.SerializerMethodField()
+    recipient_name = serializers.SerializerMethodField()
+    formatted_date = serializers.SerializerMethodField()
+    snippet = serializers.SerializerMethodField()
+    reply_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Email
+        fields = [
+            'id', 'subject', 'snippet', 'folder', 'is_read', 'is_starred', 'is_draft',
+            'sender_name', 'sender_profile_picture',
+            'recipient_name',
+            'formatted_date', 'sent_at', 'created_at',
+            'reply_count',
+        ]
+
+    def get_sender_name(self, obj):
+        profile = obj.sender.profiles.first()
+        return profile.name if profile else obj.sender.username
+
+    def get_sender_profile_picture(self, obj):
+        profile = obj.sender.profiles.first()
+        if profile and profile.profile_picture:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(profile.profile_picture.url)
+            return profile.profile_picture.url
+        return None
+
+    def get_recipient_name(self, obj):
+        profile = obj.recipient.profiles.first()
+        return profile.name if profile else obj.recipient.username
+
+    def get_formatted_date(self, obj):
+        from django.utils import timezone
+        now = timezone.now().date()
+        target = (obj.sent_at or obj.created_at).date()
+        if target == now:
+            return "Today"
+        elif (now - target).days == 1:
+            return "Yesterday"
+        return target.strftime("%m/%d/%Y")
+
+    def get_snippet(self, obj):
+        if obj.body:
+            return obj.body[:80] + ("..." if len(obj.body) > 80 else "")
+        return ""
+
+    def get_reply_count(self, obj):
+        return obj.replies.count()
+
+
+class EmailDetailSerializer(serializers.ModelSerializer):
+    """
+    Full serializer for reading a single email.
+    """
+    sender_name = serializers.SerializerMethodField()
+    sender_profile_picture = serializers.SerializerMethodField()
+    recipient_name = serializers.SerializerMethodField()
+    recipient_email = serializers.SerializerMethodField()
+    formatted_date = serializers.SerializerMethodField()
+    replies = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Email
+        fields = [
+            'id', 'subject', 'body', 'folder', 'is_read', 'is_starred', 'is_draft',
+            'sender_name', 'sender_profile_picture',
+            'recipient_name', 'recipient_email',
+            'attachment',
+            'formatted_date', 'sent_at', 'created_at',
+            'parent_email', 'replies',
+        ]
+
+    def get_sender_name(self, obj):
+        profile = obj.sender.profiles.first()
+        return profile.name if profile else obj.sender.username
+
+    def get_sender_profile_picture(self, obj):
+        profile = obj.sender.profiles.first()
+        if profile and profile.profile_picture:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(profile.profile_picture.url)
+            return profile.profile_picture.url
+        return None
+
+    def get_recipient_name(self, obj):
+        profile = obj.recipient.profiles.first()
+        return profile.name if profile else obj.recipient.username
+
+    def get_recipient_email(self, obj):
+        return obj.recipient.email
+
+    def get_formatted_date(self, obj):
+        dt = obj.sent_at or obj.created_at
+        return dt.strftime("%B %d, %Y at %I:%M %p")
+
+    def get_replies(self, obj):
+        reply_qs = obj.replies.all().order_by('created_at')
+        return EmailListSerializer(reply_qs, many=True, context=self.context).data
+
+
+class ComposeEmailSerializer(serializers.Serializer):
+    """
+    Serializer for composing/sending a new email.
+    Accepts recipient by user ID or username.
+    """
+    recipient_id = serializers.IntegerField(required=False)
+    recipient_username = serializers.CharField(required=False)
+    subject = serializers.CharField(max_length=255)
+    body = serializers.CharField()
+    is_draft = serializers.BooleanField(default=False)
+    parent_email_id = serializers.IntegerField(required=False, allow_null=True)
+
+    def validate(self, data):
+        if not data.get('recipient_id') and not data.get('recipient_username'):
+            raise serializers.ValidationError("Either 'recipient_id' or 'recipient_username' is required.")
+        return data
+
+
+# =====================================================================
+# CHAT / MESSAGING
+# =====================================================================
+from core.models import ChatMessage
+
+
+class ChatMessageSerializer(serializers.ModelSerializer):
+    """
+    Serializer for individual chat messages.
+    """
+    sender_name = serializers.SerializerMethodField()
+    sender_profile_picture = serializers.SerializerMethodField()
+    formatted_time = serializers.SerializerMethodField()
+    is_mine = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ChatMessage
+        fields = [
+            'id', 'content', 'attachment', 'is_read',
+            'sender_name', 'sender_profile_picture',
+            'formatted_time', 'is_mine',
+            'created_at',
+        ]
+
+    def get_sender_name(self, obj):
+        profile = obj.sender.profiles.first()
+        return profile.name if profile else obj.sender.username
+
+    def get_sender_profile_picture(self, obj):
+        profile = obj.sender.profiles.first()
+        if profile and profile.profile_picture:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(profile.profile_picture.url)
+            return profile.profile_picture.url
+        return None
+
+    def get_formatted_time(self, obj):
+        return obj.created_at.strftime("%I:%M %p")
+
+    def get_is_mine(self, obj):
+        request = self.context.get('request')
+        if request:
+            return obj.sender_id == request.user.id
+        return False
+
+
+class ConversationListSerializer(serializers.Serializer):
+    """
+    Serializer for the conversation sidebar.
+    Each item = one author the user has chatted with.
+    """
+    user_id = serializers.IntegerField()
+    username = serializers.CharField()
+    name = serializers.CharField()
+    profile_picture = serializers.CharField(allow_null=True)
+    location = serializers.CharField(allow_null=True)
+    last_message = serializers.CharField()
+    last_message_time = serializers.DateTimeField()
+    formatted_time = serializers.CharField()
+    unread_count = serializers.IntegerField()
