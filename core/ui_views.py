@@ -1,4 +1,4 @@
-from rest_framework.generics import ListAPIView, RetrieveAPIView
+from rest_framework.generics import ListAPIView, RetrieveAPIView, RetrieveUpdateAPIView
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.filters import SearchFilter
 from django_filters.rest_framework import DjangoFilterBackend
@@ -23,7 +23,7 @@ class SlotExploreView(ListAPIView):
         # Showing all slots so you can get the data as requested
         return NewsletterSlot.objects.all().order_by('send_date')
 
-class SlotDetailsView(RetrieveAPIView):
+class SlotDetailsView(RetrieveUpdateAPIView):
     """
     Figma Screen 1: Slot Details Modal
     Endpoint: /api/slots/<id>/details/
@@ -33,6 +33,9 @@ class SlotDetailsView(RetrieveAPIView):
 
     def get_queryset(self):
         # Allowing viewing of all slots for data retrieval
+        # Restrict update to author only
+        if self.request.method in ['PUT', 'PATCH']:
+            return NewsletterSlot.objects.filter(user=self.request.user)
         return NewsletterSlot.objects.all()
 
 class SwapArrangementView(RetrieveAPIView):
