@@ -1905,16 +1905,21 @@ class ComposeEmailView(APIView):
             try:
                 from django.core.mail import send_mail
                 from django.conf import settings
+                import logging
+                logger = logging.getLogger(__name__)
 
                 sender_profile = request.user.profiles.first()
                 sender_name = sender_profile.name if sender_profile else request.user.username
+
+                logger.info(f"Attempting to send email from {settings.DEFAULT_FROM_EMAIL} to {recipient.email}")
+                logger.info(f"Using EMAIL_HOST: {getattr(settings, 'EMAIL_HOST', 'Not Set')} as user {getattr(settings, 'EMAIL_HOST_USER', 'Not Set')}")
 
                 send_mail(
                     subject=data['subject'],
                     message=data['body'],
                     from_email=settings.DEFAULT_FROM_EMAIL,
                     recipient_list=[recipient.email],
-                    fail_silently=True,
+                    fail_silently=False,
                     html_message=f"""
                     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
                         <div style="background: #2D6A4F; padding: 20px; color: white; border-radius: 8px 8px 0 0;">
@@ -1934,7 +1939,11 @@ class ComposeEmailView(APIView):
                     </div>
                     """,
                 )
-            except Exception:
+                logger.info(f"Successfully sent email to {recipient.email}")
+            except Exception as e:
+                import traceback
+                logger.error(f"Failed to send email to {recipient.email}: {str(e)}\n{traceback.format_exc()}")
+                print(f"FAILED TO SEND EMAIL: {e}")
                 pass  # Email sending is non-critical
 
             # Create a notification for the recipient
