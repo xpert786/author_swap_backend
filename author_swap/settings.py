@@ -202,3 +202,8 @@ MAILERLITE_REJECTED_GROUP_ID = os.getenv('MAILERLITE_REJECTED_GROUP_ID')  # Mail
 # Get this from: https://console.cloud.google.com → APIs & Services → Credentials
 # Create an OAuth 2.0 Client ID → Web application
 GOOGLE_OAUTH_CLIENT_ID = os.getenv('GOOGLE_OAUTH_CLIENT_ID', '')
+
+# Stripe Integration
+STRIPE_PUBLIC_KEY = os.getenv('STRIPE_PUBLIC_KEY', '')
+STRIPE_SECRET_KEY = os.getenv('STRIPE_SECRET_KEY', '')
+STRIPE_WEBHOOK_SECRET = os.getenv('STRIPE_WEBHOOK_SECRET', '')

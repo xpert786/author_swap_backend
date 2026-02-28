@@ -34,9 +34,23 @@ class SlotPartnerSerializer(serializers.ModelSerializer):
     author = AuthorProfileSerializer(source='requester.profiles.first', read_only=True)
     rating = serializers.FloatField(source='requester.profiles.first.reputation_score', read_only=True)
     
+    # "You" is the owner of the slot. You are sending the partner's book in your slot.
+    you_send_date = serializers.DateField(source='slot.send_date', read_only=True)
+    you_send_time = serializers.TimeField(source='slot.send_time', read_only=True)
+    you_send_book = serializers.CharField(source='book.title', read_only=True)
+    
+    # "Partner" is the requester. The partner sends your book in their offered slot.
+    partner_sends_date = serializers.DateField(source='offered_slot.send_date', read_only=True)
+    partner_sends_time = serializers.TimeField(source='offered_slot.send_time', read_only=True)
+    partner_sends_book = serializers.CharField(source='requested_book.title', read_only=True)
+
     class Meta:
         model = SwapRequest
-        fields = ['id', 'author', 'status', 'created_at', 'rating']
+        fields = [
+            'id', 'author', 'status', 'created_at', 'rating',
+            'you_send_date', 'you_send_time', 'you_send_book',
+            'partner_sends_date', 'partner_sends_time', 'partner_sends_book'
+        ]
 
 class AuthorDetailedProfileSerializer(serializers.ModelSerializer):
     """Extended author profile with analytics and reputation for details modal"""

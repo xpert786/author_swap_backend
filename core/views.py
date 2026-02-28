@@ -2515,3 +2515,150 @@ class SendMessageView(APIView):
             pass
 
         return Response(ChatMessageSerializer(msg, context={'request': request}).data, status=status.HTTP_201_CREATED)
+
+import stripe
+from django.conf import settings
+from django.views.decorators.csrf import csrf_exempt
+from django.utils.decorators import method_decorator
+
+stripe.api_key = settings.STRIPE_SECRET_KEY
+
+class CreateStripeCheckoutSessionView(APIView):
+    """
+    POST /api/stripe/create-checkout-session/
+    Expects {'tier_id': 1}
+    Generates a Stripe Checkout Session URL for the specified subscription tier.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        tier_id = request.data.get('tier_id')
+        if not tier_id:
+            return Response({"detail": "tier_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            tier = SubscriptionTier.objects.get(id=tier_id)
+        except SubscriptionTier.DoesNotExist:
+            return Response({"detail": "Invalid subscription tier."}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            price_id = tier.stripe_price_id
+            
+            if not price_id:
+                # If tier has no price_id set, we'll try to find or create one based on the tier's price.
+                # In production, prices should probably be created manually in Stripe and mapped in Django admin.
+                # But for development/quick setup we can create a product/price on the fly if needed.
+                product = stripe.Product.create(
+                    name=f"Author Swap - {tier.name}",
+                    description=tier.best_for
+                )
+                price = stripe.Price.create(
+                    product=product.id,
+                    unit_amount=int(tier.price * 100), # amount in cents
+                    currency="usd",
+                    recurring={"interval": "month"},
+                )
+                tier.stripe_price_id = price.id
+                tier.save()
+                price_id = price.id
+
+            checkout_session = stripe.checkout.Session.create(
+                payment_method_types=['card'],
+                line_items=[{
+                    'price': price_id,
+                    'quantity': 1,
+                }],
+                mode='subscription',
+                client_reference_id=str(request.user.id),
+                # Frontend URLs to redirect to after checkout
+                success_url=request.build_absolute_uri('/') + "subscription/success?session_id={CHECKOUT_SESSION_ID}",
+                cancel_url=request.build_absolute_uri('/') + "subscription/cancel",
+                customer_email=request.user.email
+            )
+
+            return Response({'url': checkout_session.url})
+
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"Stripe Checkout Error: {str(e)}")
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@method_decorator(csrf_exempt, name='dispatch')
+class StripeWebhookView(APIView):
+    """
+    POST /api/stripe/webhook/
+    Listens for Stripe webhooks to update subscription status.
+    """
+    # Disable global auth/CSRF for webhooks as it uses Stripe signature
+    authentication_classes = []
+    permission_classes = []
+
+    def post(self, request):
+        payload = request.body
+        sig_header = request.META.get('HTTP_STRIPE_SIGNATURE')
+        event = None
+
+        try:
+            # You can find your endpoint's secret in your webhook settings
+            # We recommend using the Webhook Secret from your settings.
+            webhook_secret = settings.STRIPE_WEBHOOK_SECRET
+            if webhook_secret:
+                event = stripe.Webhook.construct_event(
+                    payload, sig_header, webhook_secret
+                )
+            else:
+                import json
+                event = stripe.Event.construct_from(json.loads(payload), stripe.api_key)
+
+        except ValueError as e:
+            # Invalid payload
+            return Response(status=status.HTTP_400_BAD_REQUEST)
+        except stripe.error.SignatureVerificationError as e:
+            # Invalid signature
+            return Response(status=status.HTTP_400_BAD_REQUEST)
+
+        # Handle the checkout.session.completed event
+        if event['type'] == 'checkout.session.completed':
+            session = event['data']['object']
+
+            # Retrieve the user ID from the client_reference_id
+            user_id = session.get('client_reference_id')
+            stripe_customer_id = session.get('customer')
+            stripe_subscription_id = session.get('subscription')
+
+            if user_id:
+                try:
+                    user = User.objects.get(id=user_id)
+                    
+                    # We also need to get the tier based on the price ID from the session's line items.
+                    # Since session doesn't include line items directly by default, we retrieve it:
+                    line_items = stripe.checkout.Session.list_line_items(session['id'], limit=1)
+                    if line_items and line_items.data:
+                        price_id = line_items.data[0].price.id
+                        tier = SubscriptionTier.objects.filter(stripe_price_id=price_id).first()
+                        
+                        if tier:
+                            sub_start = datetime.now().date()
+                            sub_end = sub_start + timedelta(days=30) # Roughly 1 month
+
+                            # Create or update user subscription
+                            UserSubscription.objects.update_or_create(
+                                user=user,
+                                defaults={
+                                    'tier': tier,
+                                    'active_until': sub_end,
+                                    'renew_date': sub_end,
+                                    'is_active': True,
+                                    'stripe_customer_id': stripe_customer_id,
+                                    'stripe_subscription_id': stripe_subscription_id
+                                }
+                            )
+                except Exception as e:
+                    import logging
+                    logging.getLogger(__name__).error(f"Webhook processing error: {e}")
+
+        # You might also want to handle 'invoice.payment_succeeded', 'invoice.payment_failed', 'customer.subscription.deleted' mapping to is_active flags
+
+        return Response(status=status.HTTP_200_OK)
+
