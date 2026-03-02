@@ -2590,8 +2590,8 @@ class CreateStripeCheckoutSessionView(APIView):
                 mode='subscription',
                 client_reference_id=str(request.user.id),
                 # Frontend URLs to redirect to after checkout
-                success_url="http://72.61.251.114/authorswap-frontend/subscription/success?session_id={CHECKOUT_SESSION_ID}",
-                cancel_url="http://72.61.251.114/authorswap-frontend/subscription/cancel",
+                success_url="http://72.61.251.114/authorswap-frontend/subscription",
+                cancel_url="http://72.61.251.114/authorswap-frontend/subscription",
                 customer_email=request.user.email
             )
 
