@@ -19,6 +19,20 @@ except ImportError:
 User = get_user_model()
 
 
+def is_profile_complete(user):
+    """
+    Helper to check if a user has completed their profile onboarding.
+    Defined as having pen_name and primary_genre set.
+    """
+    try:
+        profile = getattr(user, 'profile', None)
+        if not profile:
+            return False
+        return bool(profile.pen_name and profile.primary_genre)
+    except Exception:
+        return False
+
+
 class LoginAPIView(APIView):
     def post(self, request):
         serializer = LoginSerializer(data=request.data, context={'request': request})
@@ -31,6 +45,7 @@ class LoginAPIView(APIView):
                 'refresh': str(refresh),
                 'access': str(access_token),
                 'token': str(access_token),  # For backward compatibility
+                'isprofilecompleted': is_profile_complete(user),
                 'user': {
                     'id': user.id,
                     'email': user.email,
@@ -52,6 +67,7 @@ class SignupAPIView(APIView):
                 'refresh': str(refresh),
                 'access': str(access_token),
                 'token': str(access_token),  # For backward compatibility
+                'isprofilecompleted': is_profile_complete(user),
                 'user': {
                     'id': user.id,
                     'email': user.email,
@@ -405,6 +421,7 @@ class GoogleOAuthView(APIView):
             'access': str(access_token),
             'token': str(access_token),
             'is_new_user': is_new_user,
+            'isprofilecompleted': is_profile_complete(user),
             'user': {
                 'id': user.id,
                 'email': user.email,
