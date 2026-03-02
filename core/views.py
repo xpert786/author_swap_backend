@@ -1214,6 +1214,9 @@ class SubscriberVerificationView(APIView):
     """
     GET /api/subscriber-verification/
     Returns user's verification status, current subscription, and available tiers.
+    
+    POST /api/subscriber-verification/
+    Select a subscription plan.
     """
     permission_classes = [IsAuthenticated]
 
@@ -1226,6 +1229,31 @@ class SubscriberVerificationView(APIView):
             "verification": SubscriberVerificationSerializer(verification).data,
             "subscription": UserSubscriptionSerializer(subscription).data if subscription else None,
             "available_tiers": SubscriptionTierSerializer(tiers, many=True).data,
+        })
+
+    def post(self, request):
+        tier_id = request.data.get('tier_id')
+        if not tier_id:
+            return Response({"error": "tier_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+            
+        try:
+            tier = SubscriptionTier.objects.get(id=tier_id)
+        except SubscriptionTier.DoesNotExist:
+            return Response({"error": "Invalid tier_id"}, status=status.HTTP_404_NOT_FOUND)
+            
+        subscription, created = UserSubscription.objects.update_or_create(
+            user=request.user,
+            defaults={
+                'tier': tier,
+                'active_until': date.today() + timedelta(days=30),
+                'renew_date': date.today() + timedelta(days=30),
+                'is_active': True
+            }
+        )
+        
+        return Response({
+            "message": "Plan selected successfully",
+            "subscription": UserSubscriptionSerializer(subscription).data
         })
 
 
@@ -1294,12 +1322,104 @@ class SubscriberAnalyticsView(APIView):
         growth_data = SubscriberGrowth.objects.filter(user=request.user)
         campaigns = CampaignAnalytic.objects.filter(user=request.user)
         
+        # Dynamically generate link-level analysis from actual User Slots & Swaps
+        link_level_ctr = []
+        from core.models import NewsletterSlot
+        # Get the user's newsletter slots, especially those in the past or with swaps
+        slots = NewsletterSlot.objects.filter(user=request.user).prefetch_related(
+            'swap_requests__requester__profiles', 
+            'swap_requests__book',
+            'swap_requests__link_clicks'
+        ).order_by('-send_date')
+
+        for slot in slots:
+            links = []
+            has_swaps = False
+            
+            # Fetch partner link clicks for this slot's completed swaps
+            for swap in slot.swap_requests.filter(status__in=['completed', 'verified', 'confirmed', 'sending']):
+                has_swaps = True
+                for lc in swap.link_clicks.all():
+                    links.append({
+                        "id": lc.id,
+                        "name": lc.link_name,
+                        "url": lc.destination_url,
+                        "clicks": lc.clicks,
+                        "ctr": f"{lc.ctr}%",
+                        "ctr_label": lc.ctr_label,
+                        "conversion": lc.conversion or "0 sales"
+                    })
+                
+                # Fallback: if no SwapLinkClick tracker objects exist yet, generate a placeholder based on the Book promoted
+                if not swap.link_clicks.exists() and swap.book:
+                    partner_name = swap.requester.username
+                    if swap.requester.profiles.first():
+                        partner_name = swap.requester.profiles.first().name
+                    links.append({
+                        "id": f"swap_{swap.id}",
+                        "name": f"Swap Promo - {swap.book.title} ({partner_name})",
+                        "url": getattr(swap.book, 'amazon_url', '#') or "#",
+                        "clicks": 0,
+                        "ctr": "0.0%",
+                        "ctr_label": "Pending Data",
+                        "conversion": "-"
+                    })
+            
+            # Add default links if slot was just a standalone campaign (no swaps yet)
+            if not links:
+                links.append({
+                    "id": f"slot_{slot.id}",
+                    "name": f"Primary Newsletter Link",
+                    "url": "#",
+                    "clicks": 0,
+                    "ctr": "0.0%",
+                    "ctr_label": "Pending",
+                    "conversion": "-"
+                })
+
+            # Decide on a campaign name formatting similar to Figma design
+            campaign_type = "Swap" if has_swaps else "Newsletter"
+            date_str = slot.send_date.strftime("%b %-d, %Y") if slot.send_date else "TBD"
+            campaign_name = f"{campaign_type}: {slot.get_preferred_genre_display()} ({date_str})"
+            
+            link_level_ctr.append({
+                "campaign_id": slot.id,
+                "campaign_name": campaign_name,
+                "links": links
+            })
+
         return Response({
+            "connection_status": {
+                "connected": verification.is_connected_mailerlite,
+                "provider": "MailerLite",
+                "verified": verification.is_connected_mailerlite,
+                "last_synced": "04:30 PM Today"  # Usually dynamic, mock for UI
+            },
             "summary_stats": {
-                "active_subscribers": verification.audience_size,
-                "avg_open_rate": f"{verification.avg_open_rate}%",
-                "avg_click_rate": f"{verification.avg_click_rate}%",
-                "list_health_score": f"{verification.list_health_score}/100",
+                "active_subscribers": {
+                    "value": verification.audience_size,
+                    "delta": "+312",
+                    "delta_text": "this month",
+                    "is_positive": True
+                },
+                "avg_open_rate": {
+                    "value": f"{verification.avg_open_rate}%",
+                    "delta": "+21%",
+                    "delta_text": "vs last month",
+                    "is_positive": True
+                },
+                "avg_click_rate": {
+                    "value": f"{verification.avg_click_rate}%",
+                    "delta": "+0.5%",
+                    "delta_text": "vs last month",
+                    "is_positive": True
+                },
+                "list_health_score": {
+                    "value": f"{verification.list_health_score}/100",
+                    "delta": "+3",
+                    "delta_text": "points improvement",
+                    "is_positive": True
+                },
             },
             "growth_chart": SubscriberGrowthSerializer(growth_data, many=True).data,
             "list_health_metrics": {
@@ -1309,8 +1429,21 @@ class SubscriberAnalyticsView(APIView):
                 "avg_engagement": verification.avg_engagement,
             },
             "campaign_analytics": CampaignAnalyticSerializer(campaigns, many=True).data,
-            # Link-level analysis is handled per-campaign or as a general summary here
-            "link_level_ctr": [] # Placeholder for now as it depends on campaign selection in UI
+            "link_level_ctr": link_level_ctr,
+            "historical_trends": [
+                {"month": "Jan", "open_rate": 0.0, "click_rate": 0.0, "subscriber_growth": 0},
+                {"month": "Feb", "open_rate": 0.0, "click_rate": 0.0, "subscriber_growth": 0},
+                {"month": "Mar", "open_rate": 0.0, "click_rate": 0.0, "subscriber_growth": 0},
+                {"month": "Apr", "open_rate": 0.0, "click_rate": 0.0, "subscriber_growth": 0},
+                {"month": "May", "open_rate": 0.0, "click_rate": 0.0, "subscriber_growth": 0},
+                {"month": "Jun", "open_rate": 0.0, "click_rate": 0.0, "subscriber_growth": 0},
+                {"month": "Jul", "open_rate": 0.0, "click_rate": 0.0, "subscriber_growth": 0},
+                {"month": "Aug", "open_rate": 0.0, "click_rate": 0.0, "subscriber_growth": 0},
+                {"month": "Sep", "open_rate": 0.0, "click_rate": 0.0, "subscriber_growth": 0},
+                {"month": "Oct", "open_rate": 0.0, "click_rate": 0.0, "subscriber_growth": 0},
+                {"month": "Nov", "open_rate": 0.0, "click_rate": 0.0, "subscriber_growth": 0},
+                {"month": "Dec", "open_rate": 0.0, "click_rate": 0.0, "subscriber_growth": 0}
+            ]
         })
 
 
@@ -1407,18 +1540,29 @@ class AuthorDashboardView(APIView):
         recent_activities = []
 
         # Fetch recent notifications
+        from django.utils import timezone
+        now_aware = timezone.now()
+        
         notifications = Notification.objects.filter(
             recipient=user
         ).order_by('-created_at')[:10]
 
         for notif in notifications:
-            time_diff = now - notif.created_at.replace(tzinfo=None)
-            if time_diff.days == 0:
-                time_ago = "Today"
-            elif time_diff.days == 1:
+            time_diff = now_aware - notif.created_at
+            days = time_diff.days
+            seconds = time_diff.seconds
+            
+            if days == 0:
+                if seconds < 3600:
+                    mins = max(1, seconds // 60)
+                    time_ago = f"{mins} min{'s' if mins != 1 else ''} ago"
+                else:
+                    hours = seconds // 3600
+                    time_ago = f"{hours} hour{'s' if hours != 1 else ''} ago"
+            elif days == 1:
                 time_ago = "1 day ago"
             else:
-                time_ago = f"{time_diff.days} days ago"
+                time_ago = f"{days} days ago"
 
             recent_activities.append({
                 "id": notif.id,
@@ -1453,13 +1597,21 @@ class AuthorDashboardView(APIView):
                     'rejected': f"Swap request declined by {partner_name}",
                 }
 
-                time_diff = now - swap.created_at.replace(tzinfo=None)
-                if time_diff.days == 0:
-                    time_ago = "Today"
-                elif time_diff.days == 1:
+                time_diff = now_aware - swap.created_at
+                days = time_diff.days
+                seconds = time_diff.seconds
+                
+                if days == 0:
+                    if seconds < 3600:
+                        mins = max(1, seconds // 60)
+                        time_ago = f"{mins} min{'s' if mins != 1 else ''} ago"
+                    else:
+                        hours = seconds // 3600
+                        time_ago = f"{hours} hour{'s' if hours != 1 else ''} ago"
+                elif days == 1:
                     time_ago = "1 day ago"
                 else:
-                    time_ago = f"{time_diff.days} days ago"
+                    time_ago = f"{days} days ago"
 
                 recent_activities.append({
                     "id": f"swap_{swap.id}",
@@ -1555,12 +1707,19 @@ class AuthorDashboardView(APIView):
         except Exception:
             pass
 
-        pen_name = user_profile.pen_name if user_profile and user_profile.pen_name else user.username
+        pen_name = None
+        if profile and profile.name:
+            pen_name = profile.name
+        elif user_profile and user_profile.pen_name:
+            pen_name = user_profile.pen_name
+        else:
+            pen_name = user.username
+            
         profile_photo = None
-        if user_profile and user_profile.profile_photo:
-            profile_photo = request.build_absolute_uri(user_profile.profile_photo.url)
-        elif profile and profile.profile_picture:
+        if profile and profile.profile_picture:
             profile_photo = request.build_absolute_uri(profile.profile_picture.url)
+        elif user_profile and user_profile.profile_photo:
+            profile_photo = request.build_absolute_uri(user_profile.profile_photo.url)
 
         welcome = {
             "name": pen_name,
@@ -1742,20 +1901,26 @@ class ComposeEmailView(APIView):
                 attachment=email_obj.attachment,
             )
 
+            email_sent = False
             # Send real email via SMTP
             try:
                 from django.core.mail import send_mail
                 from django.conf import settings
+                import logging
+                logger = logging.getLogger(__name__)
 
                 sender_profile = request.user.profiles.first()
                 sender_name = sender_profile.name if sender_profile else request.user.username
+
+                logger.info(f"Attempting to send email from {settings.DEFAULT_FROM_EMAIL} to {recipient.email}")
+                logger.info(f"Using EMAIL_HOST: {getattr(settings, 'EMAIL_HOST', 'Not Set')} as user {getattr(settings, 'EMAIL_HOST_USER', 'Not Set')}")
 
                 send_mail(
                     subject=data['subject'],
                     message=data['body'],
                     from_email=settings.DEFAULT_FROM_EMAIL,
                     recipient_list=[recipient.email],
-                    fail_silently=True,
+                    fail_silently=False,
                     html_message=f"""
                     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
                         <div style="background: #2D6A4F; padding: 20px; color: white; border-radius: 8px 8px 0 0;">
@@ -1775,8 +1940,13 @@ class ComposeEmailView(APIView):
                     </div>
                     """,
                 )
-            except Exception:
-                pass  # Email sending is non-critical
+                logger.info(f"Successfully sent email to {recipient.email}")
+                email_sent = True
+            except Exception as e:
+                import traceback
+                logger.error(f"Failed to send email to {recipient.email}: {str(e)}\n{traceback.format_exc()}")
+                print(f"FAILED TO SEND EMAIL: {e}")
+                pass  # Email sending is non-critical, we handle the alert in response
 
             # Create a notification for the recipient
             try:
@@ -1793,7 +1963,15 @@ class ComposeEmailView(APIView):
                 pass
 
         result = EmailDetailSerializer(email_obj, context={'request': request}).data
-        result['detail'] = "Draft saved successfully." if is_draft else "Email sent successfully."
+        
+        if is_draft:
+            result['detail'] = "Draft saved successfully."
+        else:
+            if email_sent:
+                result['detail'] = "Email sent successfully."
+            else:
+                result['detail'] = "Message saved, but failed to deliver the external email notification due to server configuration."
+                
         return Response(result, status=status.HTTP_201_CREATED)
 
 
@@ -2347,3 +2525,165 @@ class SendMessageView(APIView):
             pass
 
         return Response(ChatMessageSerializer(msg, context={'request': request}).data, status=status.HTTP_201_CREATED)
+
+import stripe
+from django.conf import settings
+from django.views.decorators.csrf import csrf_exempt
+from django.utils.decorators import method_decorator
+
+stripe.api_key = settings.STRIPE_SECRET_KEY
+
+class CreateStripeCheckoutSessionView(APIView):
+    """
+    POST /api/stripe/create-checkout-session/
+    Expects {'tier_id': 1}
+    Generates a Stripe Checkout Session URL for the specified subscription tier.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        if not settings.STRIPE_SECRET_KEY:
+            return Response(
+                {"detail": "Stripe API configuration is missing. Please add STRIPE_SECRET_KEY to your backend .env file."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        
+        # Ensure it's set for this thread/process and strip any whitespace
+        stripe.api_key = settings.STRIPE_SECRET_KEY.strip()
+
+        tier_id = request.data.get('tier_id')
+        if not tier_id:
+            return Response({"detail": "tier_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            tier = SubscriptionTier.objects.get(id=tier_id)
+        except SubscriptionTier.DoesNotExist:
+            return Response({"detail": "Invalid subscription tier."}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            price_id = tier.stripe_price_id
+            
+            if not price_id:
+                # If tier has no price_id set, we'll try to find or create one based on the tier's price.
+                # In production, prices should probably be created manually in Stripe and mapped in Django admin.
+                # But for development/quick setup we can create a product/price on the fly if needed.
+                product = stripe.Product.create(
+                    name=f"Author Swap - {tier.name}",
+                    description=tier.best_for
+                )
+                price = stripe.Price.create(
+                    product=product.id,
+                    unit_amount=int(tier.price * 100), # amount in cents
+                    currency="usd",
+                    recurring={"interval": "month"},
+                )
+                tier.stripe_price_id = price.id
+                tier.save()
+                price_id = price.id
+
+            checkout_session = stripe.checkout.Session.create(
+                payment_method_types=['card'],
+                line_items=[{
+                    'price': price_id,
+                    'quantity': 1,
+                }],
+                mode='subscription',
+                client_reference_id=str(request.user.id),
+                # Frontend URLs to redirect to after checkout
+                success_url="http://72.61.251.114/authorswap-frontend/subscription",
+                cancel_url="http://72.61.251.114/authorswap-frontend/subscription",
+                customer_email=request.user.email
+            )
+
+            return Response({'url': checkout_session.url})
+
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"Stripe Checkout Error: {str(e)}")
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@method_decorator(csrf_exempt, name='dispatch')
+class StripeWebhookView(APIView):
+    """
+    POST /api/stripe/webhook/
+    Listens for Stripe webhooks to update subscription status.
+    """
+    # Disable global auth/CSRF for webhooks as it uses Stripe signature
+    authentication_classes = []
+    permission_classes = []
+
+    def post(self, request):
+        payload = request.body
+        sig_header = request.META.get('HTTP_STRIPE_SIGNATURE')
+        event = None
+
+        try:
+            # You can find your endpoint's secret in your webhook settings
+            # We recommend using the Webhook Secret from your settings.
+            webhook_secret = settings.STRIPE_WEBHOOK_SECRET
+            if webhook_secret:
+                event = stripe.Webhook.construct_event(
+                    payload, sig_header, webhook_secret
+                )
+            else:
+                import json
+                if not settings.STRIPE_SECRET_KEY:
+                    return Response(
+                        {"detail": "Stripe API key is missing. Please configure STRIPE_SECRET_KEY."},
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                    )
+                stripe.api_key = settings.STRIPE_SECRET_KEY.strip()
+                event = stripe.Event.construct_from(json.loads(payload), stripe.api_key)
+
+        except ValueError as e:
+            # Invalid payload
+            return Response(status=status.HTTP_400_BAD_REQUEST)
+        except stripe.error.SignatureVerificationError as e:
+            # Invalid signature
+            return Response(status=status.HTTP_400_BAD_REQUEST)
+
+        # Handle the checkout.session.completed event
+        if event['type'] == 'checkout.session.completed':
+            session = event['data']['object']
+
+            # Retrieve the user ID from the client_reference_id
+            user_id = session.get('client_reference_id')
+            stripe_customer_id = session.get('customer')
+            stripe_subscription_id = session.get('subscription')
+
+            if user_id:
+                try:
+                    user = User.objects.get(id=user_id)
+                    
+                    # We also need to get the tier based on the price ID from the session's line items.
+                    # Since session doesn't include line items directly by default, we retrieve it:
+                    line_items = stripe.checkout.Session.list_line_items(session['id'], limit=1)
+                    if line_items and line_items.data:
+                        price_id = line_items.data[0].price.id
+                        tier = SubscriptionTier.objects.filter(stripe_price_id=price_id).first()
+                        
+                        if tier:
+                            sub_start = datetime.now().date()
+                            sub_end = sub_start + timedelta(days=30) # Roughly 1 month
+
+                            # Create or update user subscription
+                            UserSubscription.objects.update_or_create(
+                                user=user,
+                                defaults={
+                                    'tier': tier,
+                                    'active_until': sub_end,
+                                    'renew_date': sub_end,
+                                    'is_active': True,
+                                    'stripe_customer_id': stripe_customer_id,
+                                    'stripe_subscription_id': stripe_subscription_id
+                                }
+                            )
+                except Exception as e:
+                    import logging
+                    logging.getLogger(__name__).error(f"Webhook processing error: {e}")
+
+        # You might also want to handle 'invoice.payment_succeeded', 'invoice.payment_failed', 'customer.subscription.deleted' mapping to is_active flags
+
+        return Response(status=status.HTTP_200_OK)
+

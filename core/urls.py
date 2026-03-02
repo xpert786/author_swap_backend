@@ -13,6 +13,7 @@ from .views import (
     EmailListView, ComposeEmailView, EmailDetailView, EmailActionView,
     ChatAuthorListView, ConversationListView, ChatHistoryView, SendMessageView,
     MySwapPartnersView, ComposePartnerListView,
+    CreateStripeCheckoutSessionView, StripeWebhookView
 )
 from .ui_views import SlotExploreView, SlotDetailsView, SwapArrangementView
 
@@ -77,4 +78,8 @@ urlpatterns = [
     path('chat/compose/', ComposePartnerListView.as_view(), name='chat-compose'),
     path('chat/my-partners/', MySwapPartnersView.as_view(), name='my-partners'),
     path('chat/<int:user_id>/send/', SendMessageView.as_view(), name='send-message'),
+
+    # Stripe
+    path('stripe/create-checkout-session/', CreateStripeCheckoutSessionView.as_view(), name='stripe-create-session'),
+    path('stripe/webhook/', StripeWebhookView.as_view(), name='stripe-webhook'),
 ]
