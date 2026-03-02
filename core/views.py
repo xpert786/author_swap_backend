@@ -2548,8 +2548,8 @@ class CreateStripeCheckoutSessionView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
         
-        # Ensure it's set for this thread/process
-        stripe.api_key = settings.STRIPE_SECRET_KEY
+        # Ensure it's set for this thread/process and strip any whitespace
+        stripe.api_key = settings.STRIPE_SECRET_KEY.strip()
 
         tier_id = request.data.get('tier_id')
         if not tier_id:
@@ -2633,7 +2633,7 @@ class StripeWebhookView(APIView):
                         {"detail": "Stripe API key is missing. Please configure STRIPE_SECRET_KEY."},
                         status=status.HTTP_500_INTERNAL_SERVER_ERROR
                     )
-                stripe.api_key = settings.STRIPE_SECRET_KEY
+                stripe.api_key = settings.STRIPE_SECRET_KEY.strip()
                 event = stripe.Event.construct_from(json.loads(payload), stripe.api_key)
 
         except ValueError as e:
