@@ -1901,6 +1901,7 @@ class ComposeEmailView(APIView):
                 attachment=email_obj.attachment,
             )
 
+            email_sent = False
             # Send real email via SMTP
             try:
                 from django.core.mail import send_mail
@@ -1940,11 +1941,12 @@ class ComposeEmailView(APIView):
                     """,
                 )
                 logger.info(f"Successfully sent email to {recipient.email}")
+                email_sent = True
             except Exception as e:
                 import traceback
                 logger.error(f"Failed to send email to {recipient.email}: {str(e)}\n{traceback.format_exc()}")
                 print(f"FAILED TO SEND EMAIL: {e}")
-                pass  # Email sending is non-critical
+                pass  # Email sending is non-critical, we handle the alert in response
 
             # Create a notification for the recipient
             try:
@@ -1961,7 +1963,15 @@ class ComposeEmailView(APIView):
                 pass
 
         result = EmailDetailSerializer(email_obj, context={'request': request}).data
-        result['detail'] = "Draft saved successfully." if is_draft else "Email sent successfully."
+        
+        if is_draft:
+            result['detail'] = "Draft saved successfully."
+        else:
+            if email_sent:
+                result['detail'] = "Email sent successfully."
+            else:
+                result['detail'] = "Message saved, but failed to deliver the external email notification due to server configuration."
+                
         return Response(result, status=status.HTTP_201_CREATED)
 
 
