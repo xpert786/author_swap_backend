@@ -42,12 +42,14 @@ class SlotPartnerSerializer(serializers.ModelSerializer):
     you_send_time = serializers.TimeField(source='slot.send_time', read_only=True)
     you_send_book = serializers.SerializerMethodField()
     you_send_date_formatted = serializers.SerializerMethodField()
+    you_send_time_formatted = serializers.SerializerMethodField()
     
     # "Partner" is the requester. The partner sends your book in their offered slot.
     partner_sends_date = serializers.SerializerMethodField()
     partner_sends_time = serializers.SerializerMethodField()
     partner_sends_book = serializers.SerializerMethodField()
     partner_sends_date_formatted = serializers.SerializerMethodField()
+    partner_sends_time_formatted = serializers.SerializerMethodField()
     
     # Partner's audience size from offered slot
     partner_audience_size = serializers.SerializerMethodField()
@@ -56,8 +58,8 @@ class SlotPartnerSerializer(serializers.ModelSerializer):
         model = SwapRequest
         fields = [
             'id', 'author', 'status', 'created_at', 'rating',
-            'you_send_date', 'you_send_time', 'you_send_book', 'you_send_date_formatted',
-            'partner_sends_date', 'partner_sends_time', 'partner_sends_book', 'partner_sends_date_formatted',
+            'you_send_date', 'you_send_time', 'you_send_book', 'you_send_date_formatted', 'you_send_time_formatted',
+            'partner_sends_date', 'partner_sends_time', 'partner_sends_book', 'partner_sends_date_formatted', 'partner_sends_time_formatted',
             'partner_audience_size'
         ]
 
@@ -82,10 +84,23 @@ class SlotPartnerSerializer(serializers.ModelSerializer):
             return obj.slot.send_date.strftime('%A, %B %d')
         return None
 
+    def get_you_send_time_formatted(self, obj):
+        """Returns formatted time like '10:00 AM'"""
+        if obj.slot and obj.slot.send_time:
+            # Drop the leading zero if there is one using format string
+            return obj.slot.send_time.strftime('%I:%M %p').lstrip('0')
+        return None
+
     def get_partner_sends_date_formatted(self, obj):
         """Returns formatted date like 'Friday, May 17'"""
         if obj.offered_slot and obj.offered_slot.send_date:
             return obj.offered_slot.send_date.strftime('%A, %B %d')
+        return None
+
+    def get_partner_sends_time_formatted(self, obj):
+        """Returns formatted time like '02:00 PM'"""
+        if obj.offered_slot and obj.offered_slot.send_time:
+            return obj.offered_slot.send_time.strftime('%I:%M %p').lstrip('0')
         return None
 
 class AuthorDetailedProfileSerializer(serializers.ModelSerializer):

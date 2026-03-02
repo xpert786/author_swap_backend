@@ -560,8 +560,10 @@ class SwapRequestListView(APIView):
         if serializer.is_valid():
             slot = serializer.validated_data['slot']
             book = serializer.validated_data.get('book')
+            offered_slot = serializer.validated_data.get('offered_slot')
+            requested_book = serializer.validated_data.get('requested_book')
             
-            # If no book provided, auto-pick the requester's primary promotional book
+            # Auto-pick the requester's book to promote if none provided
             if not book:
                 primary_book = Book.objects.filter(user=request.user, is_primary_promo=True).first()
                 if primary_book:
@@ -570,12 +572,18 @@ class SwapRequestListView(APIView):
                     # Fallback to the latest active book
                     book = Book.objects.filter(user=request.user, is_active=True).order_by('-created_at').first()
             
-            # if not book:
-            #     return Response({"detail": "You must have at least one active book to request a swap."}, status=status.HTTP_400_BAD_REQUEST)
-
-            #if slot.user == request.user:
-            #    return Response({"detail": "You cannot request a swap for your own slot."}, status=status.HTTP_400_BAD_REQUEST)
-            
+            # Auto-pick the slot the requester is offering in return ("Partner Sends Date/Time")
+            if not offered_slot:
+                offered_slot = NewsletterSlot.objects.filter(user=request.user, status='available').order_by('send_date').first()
+                
+            # Auto-pick the book the slot owner wants to promote ("Partner Sends Book")
+            if not requested_book:
+                primary_target = Book.objects.filter(user=slot.user, is_primary_promo=True).first()
+                if primary_target:
+                    requested_book = primary_target
+                else:
+                    requested_book = Book.objects.filter(user=slot.user, is_active=True).order_by('-created_at').first()
+                    
             # Check if a request already exists
             if SwapRequest.objects.filter(slot=slot, requester=request.user).exists():
                 return Response({"detail": "You have already sent a request for this slot."}, status=status.HTTP_400_BAD_REQUEST)
@@ -604,7 +612,13 @@ class SwapRequestListView(APIView):
                 if (target_profile.auto_approve_friends and is_friend) or meets_rep:
                     initial_status = 'confirmed'
 
-            swap_req = serializer.save(requester=request.user, status=initial_status, book=book)
+            swap_req = serializer.save(
+                requester=request.user, 
+                status=initial_status, 
+                book=book,
+                offered_slot=offered_slot,
+                requested_book=requested_book
+            )
             
             # MailerLite Notification
             if initial_status == 'pending':
