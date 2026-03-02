@@ -2532,6 +2532,15 @@ class CreateStripeCheckoutSessionView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        if not settings.STRIPE_SECRET_KEY:
+            return Response(
+                {"detail": "Stripe API configuration is missing. Please add STRIPE_SECRET_KEY to your backend .env file."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        
+        # Ensure it's set for this thread/process
+        stripe.api_key = settings.STRIPE_SECRET_KEY
+
         tier_id = request.data.get('tier_id')
         if not tier_id:
             return Response({"detail": "tier_id is required."}, status=status.HTTP_400_BAD_REQUEST)
@@ -2571,8 +2580,8 @@ class CreateStripeCheckoutSessionView(APIView):
                 mode='subscription',
                 client_reference_id=str(request.user.id),
                 # Frontend URLs to redirect to after checkout
-                success_url=request.build_absolute_uri('/') + "subscription/success?session_id={CHECKOUT_SESSION_ID}",
-                cancel_url=request.build_absolute_uri('/') + "subscription/cancel",
+                success_url="http://72.61.251.114/authorswap-frontend/subscription/success?session_id={CHECKOUT_SESSION_ID}",
+                cancel_url="http://72.61.251.114/authorswap-frontend/subscription/cancel",
                 customer_email=request.user.email
             )
 
@@ -2609,6 +2618,12 @@ class StripeWebhookView(APIView):
                 )
             else:
                 import json
+                if not settings.STRIPE_SECRET_KEY:
+                    return Response(
+                        {"detail": "Stripe API key is missing. Please configure STRIPE_SECRET_KEY."},
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                    )
+                stripe.api_key = settings.STRIPE_SECRET_KEY
                 event = stripe.Event.construct_from(json.loads(payload), stripe.api_key)
 
         except ValueError as e:
