@@ -1249,16 +1249,12 @@ class SubscriberVerificationView(APIView):
         except SubscriptionTier.DoesNotExist:
             return Response({"error": "Invalid tier_id"}, status=status.HTTP_404_NOT_FOUND)
             
-        # Calculate real 1-month forward using calendar month arithmetic
-        from dateutil.relativedelta import relativedelta
-        today = date.today()
-        one_month_later = today + relativedelta(months=1)
         subscription, created = UserSubscription.objects.update_or_create(
             user=request.user,
             defaults={
                 'tier': tier,
-                'active_until': one_month_later,
-                'renew_date': one_month_later,
+                'active_until': date.today() + timedelta(days=30),
+                'renew_date': date.today() + timedelta(days=30),
                 'is_active': True
             }
         )
@@ -2676,30 +2672,16 @@ class StripeWebhookView(APIView):
                         tier = SubscriptionTier.objects.filter(stripe_price_id=price_id).first()
                         
                         if tier:
-                            # Retrieve real period dates from Stripe subscription object
-                            sub_end_date = None
-                            if stripe_subscription_id:
-                                try:
-                                    stripe_sub = stripe.Subscription.retrieve(stripe_subscription_id)
-                                    period_end_ts = stripe_sub.get('current_period_end')
-                                    if period_end_ts:
-                                        from datetime import timezone as dt_timezone
-                                        sub_end_date = datetime.fromtimestamp(period_end_ts, tz=dt_timezone.utc).date()
-                                except Exception:
-                                    pass
-                            
-                            # Fallback to calendar-month calculation if Stripe data unavailable
-                            if not sub_end_date:
-                                from dateutil.relativedelta import relativedelta
-                                sub_end_date = datetime.now().date() + relativedelta(months=1)
+                            sub_start = datetime.now().date()
+                            sub_end = sub_start + timedelta(days=30) # Roughly 1 month
 
-                            # Create or update user subscription with real Stripe dates
+                            # Create or update user subscription
                             UserSubscription.objects.update_or_create(
                                 user=user,
                                 defaults={
                                     'tier': tier,
-                                    'active_until': sub_end_date,
-                                    'renew_date': sub_end_date,
+                                    'active_until': sub_end,
+                                    'renew_date': sub_end,
                                     'is_active': True,
                                     'stripe_customer_id': stripe_customer_id,
                                     'stripe_subscription_id': stripe_subscription_id
