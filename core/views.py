@@ -938,14 +938,8 @@ class SwapManagementListView(APIView):
                 Q(slot__send_date__icontains=search)
             ).distinct()
 
-        # Sync audience from MailerLite for each unique requester (non-blocking)
-        try:
-            for swap in qs[:20]:  # Limit to avoid overloading
-                profile = swap.requester.profiles.first()
-                if profile:
-                    sync_profile_audience(profile)
-        except Exception:
-            pass  # MailerLite may not be configured; silently continue
+        # Removed blocking sync_profile_audience loop to prevent API cancellation/timeout.
+        # This should be handled by a background task or a separate endpoint.
 
         serializer = SwapManagementSerializer(qs, many=True, context={'request': request})
 
