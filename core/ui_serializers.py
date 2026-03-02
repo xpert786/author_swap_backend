@@ -8,7 +8,10 @@ class AuthorProfileSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Profile
-        fields = ['id', 'name', 'profile_picture', 'swaps_completed', 'reputation_score', 'rating']
+        fields = [
+            'id', 'name', 'profile_picture', 'swaps_completed', 'reputation_score', 'rating',
+            'primary_genre', 'send_reliability_percent'
+        ]
 
     def get_swaps_completed(self, obj):
         return obj.swaps_completed
@@ -38,19 +41,37 @@ class SlotPartnerSerializer(serializers.ModelSerializer):
     you_send_date = serializers.DateField(source='slot.send_date', read_only=True)
     you_send_time = serializers.TimeField(source='slot.send_time', read_only=True)
     you_send_book = serializers.CharField(source='book.title', read_only=True)
+    you_send_date_formatted = serializers.SerializerMethodField()
     
     # "Partner" is the requester. The partner sends your book in their offered slot.
     partner_sends_date = serializers.DateField(source='offered_slot.send_date', read_only=True)
     partner_sends_time = serializers.TimeField(source='offered_slot.send_time', read_only=True)
     partner_sends_book = serializers.CharField(source='requested_book.title', read_only=True)
+    partner_sends_date_formatted = serializers.SerializerMethodField()
+    
+    # Partner's audience size from offered slot
+    partner_audience_size = serializers.IntegerField(source='offered_slot.audience_size', read_only=True)
 
     class Meta:
         model = SwapRequest
         fields = [
             'id', 'author', 'status', 'created_at', 'rating',
-            'you_send_date', 'you_send_time', 'you_send_book',
-            'partner_sends_date', 'partner_sends_time', 'partner_sends_book'
+            'you_send_date', 'you_send_time', 'you_send_book', 'you_send_date_formatted',
+            'partner_sends_date', 'partner_sends_time', 'partner_sends_book', 'partner_sends_date_formatted',
+            'partner_audience_size'
         ]
+
+    def get_you_send_date_formatted(self, obj):
+        """Returns formatted date like 'Wednesday, May 15'"""
+        if obj.slot and obj.slot.send_date:
+            return obj.slot.send_date.strftime('%A, %B %d')
+        return None
+
+    def get_partner_sends_date_formatted(self, obj):
+        """Returns formatted date like 'Friday, May 17'"""
+        if obj.offered_slot and obj.offered_slot.send_date:
+            return obj.offered_slot.send_date.strftime('%A, %B %d')
+        return None
 
 class AuthorDetailedProfileSerializer(serializers.ModelSerializer):
     """Extended author profile with analytics and reputation for details modal"""
