@@ -1170,6 +1170,7 @@ class ChatMessageSerializer(serializers.ModelSerializer):
         model = ChatMessage
         fields = [
             'id', 'sender', 'content', 'text', 'attachment', 'is_read', 'is_file',
+            'is_edited', 'updated_at',
             'sender_name', 'sender_profile_picture',
             'formatted_time', 'is_mine',
             'created_at',

@@ -2534,6 +2534,58 @@ class SendMessageView(APIView):
 
         return Response(ChatMessageSerializer(msg, context={'request': request}).data, status=status.HTTP_201_CREATED)
 
+
+class ChatMessageDetailView(APIView):
+    """
+    PATCH /api/chat/message/<message_id>/  — Edit your own message content.
+    DELETE /api/chat/message/<message_id>/ — Delete your own message.
+
+    Only the original sender can edit or delete a message.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get_message(self, pk, user):
+        try:
+            return ChatMessage.objects.get(pk=pk, sender=user)
+        except ChatMessage.DoesNotExist:
+            return None
+
+    def patch(self, request, message_id):
+        msg = self.get_message(message_id, request.user)
+        if not msg:
+            return Response(
+                {"detail": "Message not found or you are not the sender."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        new_content = request.data.get('content', '').strip()
+        if not new_content:
+            return Response(
+                {"detail": "Content cannot be empty."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        msg.content = new_content
+        msg.is_edited = True
+        msg.save(update_fields=['content', 'is_edited', 'updated_at'])
+
+        return Response(
+            ChatMessageSerializer(msg, context={'request': request}).data
+        )
+
+    def delete(self, request, message_id):
+        msg = self.get_message(message_id, request.user)
+        if not msg:
+            return Response(
+                {"detail": "Message not found or you are not the sender."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        msg.delete()
+        return Response({"detail": "Message deleted."}, status=status.HTTP_204_NO_CONTENT)
+
+
+
 import stripe
 from django.conf import settings
 from django.views.decorators.csrf import csrf_exempt
@@ -2570,24 +2622,33 @@ class CreateStripeCheckoutSessionView(APIView):
 
         try:
             price_id = tier.stripe_price_id
-            
-            if not price_id:
-                # If tier has no price_id set, we'll try to find or create one based on the tier's price.
-                # In production, prices should probably be created manually in Stripe and mapped in Django admin.
-                # But for development/quick setup we can create a product/price on the fly if needed.
+
+            def _ensure_valid_price(t):
+                """Create a new Stripe Product+Price for the tier and persist it."""
                 product = stripe.Product.create(
-                    name=f"Author Swap - {tier.name}",
-                    description=tier.best_for
+                    name=f"Author Swap - {t.name}",
+                    description=t.best_for or t.name,
                 )
                 price = stripe.Price.create(
                     product=product.id,
-                    unit_amount=int(tier.price * 100), # amount in cents
+                    unit_amount=int(t.price * 100),
                     currency="usd",
                     recurring={"interval": "month"},
                 )
-                tier.stripe_price_id = price.id
-                tier.save()
-                price_id = price.id
+                t.stripe_price_id = price.id
+                t.save(update_fields=['stripe_price_id'])
+                return price.id
+
+            if not price_id:
+                # No price stored yet — create a fresh one
+                price_id = _ensure_valid_price(tier)
+            else:
+                # Validate the stored price against the current Stripe account.
+                # If it belongs to a different account or was deleted, recreate it.
+                try:
+                    stripe.Price.retrieve(price_id)
+                except stripe.error.InvalidRequestError:
+                    price_id = _ensure_valid_price(tier)
 
             checkout_session = stripe.checkout.Session.create(
                 payment_method_types=['card'],
@@ -2597,7 +2658,6 @@ class CreateStripeCheckoutSessionView(APIView):
                 }],
                 mode='subscription',
                 client_reference_id=str(request.user.id),
-                # Frontend URLs to redirect to after checkout
                 success_url="http://72.61.251.114/authorswap-frontend/subscription",
                 cancel_url="http://72.61.251.114/authorswap-frontend/subscription",
                 customer_email=request.user.email
