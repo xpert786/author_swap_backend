@@ -1238,9 +1238,23 @@ class SubscriberVerificationView(APIView):
 
         tiers = SubscriptionTier.objects.all().order_by('price')
 
+        sub_data = UserSubscriptionSerializer(subscription).data if subscription else None
+        
+        # 🔗 Add Stripe Customer Portal URL for billing management
+        if subscription and subscription.stripe_customer_id:
+            try:
+                portal_session = stripe.billing_portal.Session.create(
+                    customer=subscription.stripe_customer_id,
+                    return_url="http://72.61.251.114/authorswap-frontend/subscription",
+                )
+                if sub_data:
+                    sub_data['portal_url'] = portal_session.url
+            except Exception:
+                pass
+
         return Response({
             "verification": SubscriberVerificationSerializer(verification).data,
-            "subscription": UserSubscriptionSerializer(subscription).data if subscription else None,
+            "subscription": sub_data,
             "available_tiers": SubscriptionTierSerializer(tiers, many=True).data,
         })
 
