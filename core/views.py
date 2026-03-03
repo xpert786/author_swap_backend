@@ -2649,30 +2649,45 @@ class CreateStripeCheckoutSessionView(APIView):
             # ── If user already has an active subscription, use ChangePlanView logic ──
             existing_sub = getattr(request.user, 'subscription', None)
             if existing_sub and existing_sub.stripe_subscription_id and existing_sub.is_active:
-                # Redirect to plan-change flow instead of creating a new checkout
-                stripe_sub = stripe.Subscription.retrieve(existing_sub.stripe_subscription_id)
-                item_id = stripe_sub['items']['data'][0]['id']
+                # Try to modify the existing subscription in-place.
+                # If the stored subscription ID is stale (wrong account/deleted),
+                # fall through silently to create a fresh Checkout Session.
+                try:
+                    stripe_sub = stripe.Subscription.retrieve(existing_sub.stripe_subscription_id)
+                    item_id = stripe_sub['items']['data'][0]['id']
 
-                stripe.Subscription.modify(
-                    existing_sub.stripe_subscription_id,
-                    items=[{'id': item_id, 'price': price_id}],
-                    proration_behavior='create_prorations',
-                )
+                    stripe.Subscription.modify(
+                        existing_sub.stripe_subscription_id,
+                        items=[{'id': item_id, 'price': price_id}],
+                        proration_behavior='create_prorations',
+                    )
 
-                # Update our DB record immediately
-                sub_start = datetime.now().date()
-                sub_end = sub_start + timedelta(days=30)
-                existing_sub.tier = tier
-                existing_sub.active_until = sub_end
-                existing_sub.renew_date = sub_end
-                existing_sub.is_active = True
-                existing_sub.save(update_fields=['tier', 'active_until', 'renew_date', 'is_active'])
+                    # Update our DB record immediately
+                    sub_start = datetime.now().date()
+                    sub_end = sub_start + timedelta(days=30)
+                    existing_sub.tier = tier
+                    existing_sub.active_until = sub_end
+                    existing_sub.renew_date = sub_end
+                    existing_sub.is_active = True
+                    existing_sub.save(update_fields=['tier', 'active_until', 'renew_date', 'is_active'])
 
-                return Response({
-                    "detail": f"Plan updated to {tier.label} successfully.",
-                    "tier": tier.name,
-                    "label": tier.label,
-                })
+                    return Response({
+                        "detail": f"Plan updated to {tier.label} successfully.",
+                        "tier": tier.name,
+                        "label": tier.label,
+                    })
+
+                except stripe.error.InvalidRequestError:
+                    # Stale subscription ID (different Stripe account or deleted).
+                    # Clear it so a fresh checkout session creates a new subscription.
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        f"Stale stripe_subscription_id '{existing_sub.stripe_subscription_id}' "
+                        f"for user {request.user.id}. Clearing and falling back to new checkout."
+                    )
+                    existing_sub.stripe_subscription_id = None
+                    existing_sub.stripe_customer_id = None
+                    existing_sub.save(update_fields=['stripe_subscription_id', 'stripe_customer_id'])
 
             # ── New subscription — create a Checkout Session ──
             checkout_kwargs = dict(
@@ -2758,8 +2773,25 @@ class ChangePlanView(APIView):
                 except stripe.error.InvalidRequestError:
                     price_id = _ensure_valid_price(tier)
 
-            # Retrieve current subscription and its first item
-            stripe_sub = stripe.Subscription.retrieve(user_sub.stripe_subscription_id)
+            # Retrieve current subscription and its first item.
+            # If the stored ID is stale (belongs to a different Stripe account),
+            # clear it and tell the frontend to use the checkout flow.
+            try:
+                stripe_sub = stripe.Subscription.retrieve(user_sub.stripe_subscription_id)
+            except stripe.error.InvalidRequestError:
+                user_sub.stripe_subscription_id = None
+                user_sub.stripe_customer_id = None
+                user_sub.save(update_fields=['stripe_subscription_id', 'stripe_customer_id'])
+                return Response(
+                    {
+                        "error": "stale_subscription",
+                        "detail": "Your previous subscription record is from a different Stripe account. "
+                                  "Please use the checkout flow to create a new subscription.",
+                        "redirect_to_checkout": True,
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
             item_id = stripe_sub['items']['data'][0]['id']
 
             # Modify the subscription in-place (prorate the difference)
