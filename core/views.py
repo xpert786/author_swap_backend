@@ -2775,22 +2775,30 @@ class ChangePlanView(APIView):
 
             # Retrieve current subscription and its first item.
             # If the stored ID is stale (belongs to a different Stripe account),
-            # clear it and tell the frontend to use the checkout flow.
+            # clear the bad data and automatically create a fresh Checkout Session.
             try:
                 stripe_sub = stripe.Subscription.retrieve(user_sub.stripe_subscription_id)
             except stripe.error.InvalidRequestError:
+                import logging
+                logging.getLogger(__name__).warning(
+                    f"Stale stripe_subscription_id '{user_sub.stripe_subscription_id}' "
+                    f"for user {request.user.id}. Clearing and creating a new checkout session."
+                )
                 user_sub.stripe_subscription_id = None
                 user_sub.stripe_customer_id = None
                 user_sub.save(update_fields=['stripe_subscription_id', 'stripe_customer_id'])
-                return Response(
-                    {
-                        "error": "stale_subscription",
-                        "detail": "Your previous subscription record is from a different Stripe account. "
-                                  "Please use the checkout flow to create a new subscription.",
-                        "redirect_to_checkout": True,
-                    },
-                    status=status.HTTP_400_BAD_REQUEST,
+
+                # Auto-create a fresh Checkout Session for the requested tier
+                checkout_session = stripe.checkout.Session.create(
+                    payment_method_types=['card'],
+                    line_items=[{'price': price_id, 'quantity': 1}],
+                    mode='subscription',
+                    client_reference_id=str(request.user.id),
+                    success_url="http://72.61.251.114/authorswap-frontend/subscription",
+                    cancel_url="http://72.61.251.114/authorswap-frontend/subscription",
+                    customer_email=request.user.email,
                 )
+                return Response({'url': checkout_session.url}, status=status.HTTP_200_OK)
 
             item_id = stripe_sub['items']['data'][0]['id']
 
