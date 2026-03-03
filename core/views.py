@@ -2595,6 +2595,43 @@ stripe.api_key = settings.STRIPE_SECRET_KEY
 # Stripe shared helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _safe_period_end(stripe_obj):
+    """
+    Safely extract current_period_end from a Stripe subscription object.
+    Works whether the object is a StripeObject, plain dict, or partially
+    expanded (e.g. from a Checkout Session expand). Falls back to 30 days
+    from today if the field is missing or None.
+    """
+    from datetime import date as _d, timedelta as _td
+    import time as _t
+
+    ts = None
+    # Try attribute access first (StripeObject), then key access
+    try:
+        ts = stripe_obj.current_period_end
+    except AttributeError:
+        pass
+    if ts is None:
+        try:
+            ts = stripe_obj.get('current_period_end')
+        except (AttributeError, TypeError):
+            pass
+    if ts is None:
+        try:
+            ts = stripe_obj['current_period_end']
+        except (KeyError, TypeError):
+            pass
+
+    if ts:
+        try:
+            return _d.fromtimestamp(int(ts))
+        except (OSError, OverflowError, ValueError):
+            pass
+
+    # Fallback: 30 days from today
+    return _d.today() + _td(days=30)
+
+
 def _get_or_create_stripe_customer(user, user_sub):
     """
     Ensure the user has a valid Stripe Customer on the current Stripe account.
@@ -2745,7 +2782,7 @@ class CreateStripeCheckoutSessionView(APIView):
 
                     # Use Stripe's real billing cycle end (not a hardcoded +30 days)
                     from datetime import date as _date
-                    period_end = _date.fromtimestamp(updated_sub['current_period_end'])
+                    period_end = _safe_period_end(updated_sub)
                     existing_sub.tier = tier
                     existing_sub.active_until = period_end
                     existing_sub.renew_date = period_end
@@ -2931,7 +2968,7 @@ class ChangePlanView(APIView):
             # Use Stripe's real billing period end — not a hardcoded +30 days.
             # This preserves the original billing anchor even after a mid-cycle plan change.
             from datetime import date as _date
-            period_end = _date.fromtimestamp(updated_sub['current_period_end'])
+            period_end = _safe_period_end(updated_sub)
             user_sub.tier = tier
             user_sub.active_until = period_end
             user_sub.renew_date = period_end
@@ -3050,7 +3087,7 @@ class PreviewPlanChangeView(APIView):
                     })
 
             amount_due = round(upcoming['amount_due'] / 100, 2)
-            period_end = _date.fromtimestamp(stripe_sub['current_period_end'])
+            period_end = _safe_period_end(stripe_sub)
 
             current_tier = user_sub.tier
             current_plan_label = f"{current_tier.name} - {current_tier.label} (${current_tier.price}/mo)"
@@ -3560,15 +3597,15 @@ class SyncSubscriptionView(APIView):
                         status=status.HTTP_404_NOT_FOUND,
                     )
                 active_sub = subs.data[0]
-                stripe_subscription_id = active_sub['id']
+                stripe_subscription_id = active_sub.get('id') or active_sub['id']
                 stripe_price_id = active_sub['items']['data'][0]['price']['id']
-                period_end_ts = active_sub['current_period_end']
+                period_end_ts = _safe_period_end(active_sub)
             else:
                 # Retrieve the subscription to get current_period_end
                 active_sub = stripe.Subscription.retrieve(stripe_subscription_id)
                 if not stripe_price_id:
                     stripe_price_id = active_sub['items']['data'][0]['price']['id']
-                period_end_ts = active_sub['current_period_end']
+                period_end_ts = _safe_period_end(active_sub)
 
             # ── Match price to a SubscriptionTier in our DB ──
             tier = SubscriptionTier.objects.filter(stripe_price_id=stripe_price_id).first()
@@ -3594,8 +3631,8 @@ class SyncSubscriptionView(APIView):
                 )
 
             # ── Create or update the UserSubscription record ──
-            from datetime import date as _d
-            period_end = _d.fromtimestamp(period_end_ts)
+            # period_end_ts is already a date object returned by _safe_period_end()
+            period_end = period_end_ts
 
             obj, created = UserSubscription.objects.update_or_create(
                 user=user,
