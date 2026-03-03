@@ -1232,64 +1232,9 @@ class SubscriberVerificationView(APIView):
         verification, _ = SubscriberVerification.objects.get_or_create(user=request.user)
         subscription = UserSubscription.objects.filter(user=request.user, is_active=True).first()
 
-        # ── Auto-sync from Stripe if no local subscription record exists ──
+        # ── Auto-sync from Stripe if no local active subscription record exists ──
         if not subscription:
-            try:
-                import stripe as _stripe
-                from django.conf import settings as _settings
-                _stripe.api_key = _settings.STRIPE_SECRET_KEY.strip()
-
-                user = request.user
-                user_sub_any = UserSubscription.objects.filter(user=user).first()
-                stripe_customer_id = user_sub_any.stripe_customer_id if user_sub_any else None
-
-                # Try stored customer ID first, then search by email
-                if stripe_customer_id:
-                    try:
-                        _stripe.Customer.retrieve(stripe_customer_id)
-                    except _stripe.error.InvalidRequestError:
-                        stripe_customer_id = None
-
-                if not stripe_customer_id:
-                    customers = _stripe.Customer.list(email=user.email, limit=5)
-                    for c in customers.data:
-                        subs_check = _stripe.Subscription.list(customer=c.id, status='active', limit=1)
-                        if subs_check.data:
-                            stripe_customer_id = c.id
-                            break
-
-                if stripe_customer_id:
-                    active_subs = _stripe.Subscription.list(
-                        customer=stripe_customer_id, status='active', limit=1
-                    )
-                    if active_subs.data:
-                        active_sub = active_subs.data[0]
-                        stripe_price_id = active_sub['items']['data'][0]['price']['id']
-                        tier = SubscriptionTier.objects.filter(stripe_price_id=stripe_price_id).first()
-
-                        if not tier:
-                            # Fallback: match by price amount
-                            price_obj = _stripe.Price.retrieve(stripe_price_id)
-                            amount_cents = price_obj.get('unit_amount', 0)
-                            tier = SubscriptionTier.objects.filter(
-                                price=round(amount_cents / 100, 2)
-                            ).first()
-
-                        if tier:
-                            period_end = _safe_period_end(active_sub)
-                            subscription, _ = UserSubscription.objects.update_or_create(
-                                user=user,
-                                defaults={
-                                    'tier': tier,
-                                    'active_until': period_end,
-                                    'renew_date': period_end,
-                                    'is_active': True,
-                                    'stripe_customer_id': stripe_customer_id,
-                                    'stripe_subscription_id': active_sub['id'],
-                                }
-                            )
-            except Exception:
-                pass  # Never break the GET — just return null if Stripe is unreachable
+            subscription = _sync_user_subscription_from_stripe(request.user)
 
         tiers = SubscriptionTier.objects.all().order_by('price')
 
@@ -2768,6 +2713,77 @@ def _apply_unused_credit(user_sub, stripe_customer_id):
     return credit_cents
 
 
+def _sync_user_subscription_from_stripe(user):
+    """
+    Proactively checks Stripe for active/trialing subscriptions and syncs DB.
+    Returns the UserSubscription object if found/created, else None.
+    """
+    try:
+        user_sub = getattr(user, 'subscription', None)
+        stripe_customer_id = user_sub.stripe_customer_id if user_sub else None
+
+        # 1. Validate stored ID or search by email
+        if stripe_customer_id:
+            try:
+                stripe.Customer.retrieve(stripe_customer_id)
+            except stripe.error.InvalidRequestError:
+                stripe_customer_id = None
+
+        if not stripe_customer_id:
+            customers = stripe.Customer.list(email=user.email, limit=1)
+            if customers.data:
+                stripe_customer_id = customers.data[0].id
+
+        if not stripe_customer_id:
+            return None
+
+        # 2. Look for active or trialing subscriptions
+        subs = stripe.Subscription.list(
+            customer=stripe_customer_id, 
+            status='all', # filter manually to be safe
+            limit=5
+        )
+        active_sub = None
+        for s in subs.data:
+            if s.status in ('active', 'trialing'):
+                active_sub = s
+                break
+        
+        if not active_sub:
+            return None
+
+        # 3. Match price to Tier
+        price_id = active_sub['items']['data'][0]['price']['id']
+        tier = SubscriptionTier.objects.filter(stripe_price_id=price_id).first()
+        if not tier:
+            # Fallback by amount
+            p_obj = stripe.Price.retrieve(price_id)
+            tier = SubscriptionTier.objects.filter(price=round(p_obj.unit_amount/100, 2)).first()
+
+        if not tier:
+            return None
+
+        # 4. Sync DB
+        period_end = _safe_period_end(active_sub)
+        obj, _ = UserSubscription.objects.update_or_create(
+            user=user,
+            defaults={
+                'tier': tier,
+                'active_until': period_end,
+                'renew_date': period_end,
+                'is_active': True,
+                'stripe_customer_id': stripe_customer_id,
+                'stripe_subscription_id': active_sub.id,
+            }
+        )
+        return obj
+
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"Sync from Stripe Error for user {user.id}: {str(e)}")
+        return None
+
+
 class CreateStripeCheckoutSessionView(APIView):
     """
     POST /api/stripe/create-checkout-session/
@@ -2928,9 +2944,11 @@ class ChangePlanView(APIView):
 
         user_sub = getattr(request.user, 'subscription', None)
 
+        # ── Auto-sync from Stripe if missing or inactive ──
+        if not user_sub or not user_sub.stripe_subscription_id or not user_sub.is_active:
+            user_sub = _sync_user_subscription_from_stripe(request.user)
+
         # If user has no subscription record at all, they must subscribe first via checkout.
-        # But if the record exists with no stripe_subscription_id (cleared from a stale ID),
-        # we auto-create a checkout session for them below.
         if not user_sub:
             return Response(
                 {"detail": "No active subscription found. Please subscribe first via the checkout flow."},
@@ -3091,6 +3109,9 @@ class PreviewPlanChangeView(APIView):
             return Response({"detail": "Invalid subscription tier."}, status=status.HTTP_404_NOT_FOUND)
 
         user_sub = getattr(request.user, 'subscription', None)
+        if not user_sub or not user_sub.stripe_subscription_id or not user_sub.stripe_customer_id:
+            user_sub = _sync_user_subscription_from_stripe(request.user)
+
         if not user_sub or not user_sub.stripe_subscription_id or not user_sub.stripe_customer_id:
             return Response(
                 {"detail": "No active subscription to preview changes for."},
