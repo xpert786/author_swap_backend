@@ -1246,6 +1246,9 @@ class SubscriberVerificationView(APIView):
                 portal_session = stripe.billing_portal.Session.create(
                     customer=subscription.stripe_customer_id,
                     return_url="http://72.61.251.114/authorswap-frontend/subscription",
+                    flow_data={
+                        'type': 'payment_method_update'
+                    }
                 )
                 if sub_data:
                     sub_data['portal_url'] = portal_session.url
@@ -3074,6 +3077,9 @@ class ChangePlanView(APIView):
                     portal_session = stripe.billing_portal.Session.create(
                         customer=user_sub.stripe_customer_id,
                         return_url="http://72.61.251.114/authorswap-frontend/subscription",
+                        flow_data={
+                            'type': 'payment_method_update'
+                        }
                     )
                     portal_url = portal_session.url
                 except Exception:
