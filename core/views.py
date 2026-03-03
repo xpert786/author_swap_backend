@@ -3046,25 +3046,31 @@ class ChangePlanView(APIView):
 
             # Use Stripe's real billing period end — not a hardcoded +30 days.
             # This preserves the original billing anchor even after a mid-cycle plan change.
-            from datetime import date as _date
+            # ── Retrieve a Customer Portal URL ──
+            # Only provide the link if they are UPGRADING to a larger/more expensive plan.
+            # Otherwise, we don't return a link.
+            portal_url = None
             period_end = _safe_period_end(updated_sub)
+            old_price = float(user_sub.tier.price) if user_sub.tier else 0
+            new_price = float(tier.price)
+            is_upgrade = new_price > old_price
+
+            if is_upgrade:
+                try:
+                    portal_session = stripe.billing_portal.Session.create(
+                        customer=user_sub.stripe_customer_id,
+                        return_url="http://72.61.251.114/authorswap-frontend/subscription",
+                    )
+                    portal_url = portal_session.url
+                except Exception:
+                    pass  # Don't fail the plan change if portal creation fails
+
+            # Now update the local DB
             user_sub.tier = tier
             user_sub.active_until = period_end
             user_sub.renew_date = period_end
             user_sub.is_active = True
             user_sub.save(update_fields=['tier', 'active_until', 'renew_date', 'is_active'])
-
-            # ── Retrieve a Customer Portal URL ──
-            # This allows the user to manage their new subscription immediately on Stripe.
-            portal_url = None
-            try:
-                portal_session = stripe.billing_portal.Session.create(
-                    customer=user_sub.stripe_customer_id,
-                    return_url="http://72.61.251.114/authorswap-frontend/subscription",
-                )
-                portal_url = portal_session.url
-            except Exception:
-                pass  # Don't fail the plan change if portal creation fails
 
             return Response({
                 "detail": f"Plan changed to {tier.label} successfully.",
@@ -3073,6 +3079,7 @@ class ChangePlanView(APIView):
                 "price": str(tier.price),
                 "active_until": str(period_end),
                 "url": portal_url,
+                "is_upgrade": is_upgrade
             })
 
         except stripe.error.InvalidRequestError as e:
