@@ -3456,3 +3456,175 @@ class SetDefaultPaymentMethodView(APIView):
             import logging
             logging.getLogger(__name__).error(f"SetDefaultPaymentMethod Error: {str(e)}")
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class SyncSubscriptionView(APIView):
+    """
+    POST /api/stripe/sync-subscription/
+
+    Queries Stripe directly for the authenticated user's active subscriptions
+    and creates or updates the local UserSubscription record.
+
+    Call this endpoint right after the user returns from Stripe's checkout
+    success URL so the DB is updated even if the webhook hasn't fired yet.
+
+    Optionally accepts a Stripe Checkout Session ID to use as a hint:
+        { "session_id": "cs_test_xxx" }   ← pass this if you have it
+
+    Response (success):
+        {
+            "detail": "Subscription synced.",
+            "tier": "Tier 2",
+            "label": "Starter",
+            "price": "28.99",
+            "active_until": "2026-04-02",
+            "is_active": true
+        }
+
+    Response (nothing found yet):
+        { "detail": "No active Stripe subscription found yet. Try again in a moment." }
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        stripe.api_key = settings.STRIPE_SECRET_KEY.strip()
+
+        user = request.user
+        user_sub = getattr(user, 'subscription', None)
+        session_id = request.data.get('session_id')
+
+        try:
+            stripe_customer_id = None
+            stripe_subscription_id = None
+            stripe_price_id = None
+
+            # ── Path 1: We have a session_id from the success URL ──
+            if session_id:
+                try:
+                    session = stripe.checkout.Session.retrieve(
+                        session_id,
+                        expand=['line_items', 'subscription'],
+                    )
+                    stripe_customer_id = session.get('customer')
+                    stripe_subscription_id = session.get('subscription')
+
+                    # Extract the price ID from line items
+                    line_items = session.get('line_items')
+                    if line_items and line_items.get('data'):
+                        stripe_price_id = line_items['data'][0]['price']['id']
+
+                    # If subscription is an object (expanded), get its details directly
+                    if isinstance(stripe_subscription_id, dict):
+                        sub_obj = stripe_subscription_id
+                        stripe_subscription_id = sub_obj['id']
+                        if not stripe_price_id:
+                            stripe_price_id = sub_obj['items']['data'][0]['price']['id']
+
+                except stripe.error.InvalidRequestError:
+                    pass  # Bad session ID — fall through to customer search
+
+            # ── Path 2: Look up by existing customer ID in our DB ──
+            if not stripe_subscription_id and user_sub and user_sub.stripe_customer_id:
+                try:
+                    stripe.Customer.retrieve(user_sub.stripe_customer_id)
+                    stripe_customer_id = user_sub.stripe_customer_id
+                except stripe.error.InvalidRequestError:
+                    stripe_customer_id = None
+
+            # ── Path 3: Search Stripe for a customer by email ──
+            if not stripe_customer_id:
+                customers = stripe.Customer.list(email=user.email, limit=5)
+                for c in customers.data:
+                    # Pick the customer that has active subscriptions
+                    subs = stripe.Subscription.list(customer=c.id, status='active', limit=1)
+                    if subs.data:
+                        stripe_customer_id = c.id
+                        break
+
+            if not stripe_customer_id:
+                return Response(
+                    {'detail': 'No active Stripe subscription found yet. Try again in a moment.'},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+            # ── Fetch the latest active subscription for this customer ──
+            if not stripe_subscription_id:
+                subs = stripe.Subscription.list(
+                    customer=stripe_customer_id,
+                    status='active',
+                    limit=1,
+                )
+                if not subs.data:
+                    return Response(
+                        {'detail': 'No active Stripe subscription found yet. Try again in a moment.'},
+                        status=status.HTTP_404_NOT_FOUND,
+                    )
+                active_sub = subs.data[0]
+                stripe_subscription_id = active_sub['id']
+                stripe_price_id = active_sub['items']['data'][0]['price']['id']
+                period_end_ts = active_sub['current_period_end']
+            else:
+                # Retrieve the subscription to get current_period_end
+                active_sub = stripe.Subscription.retrieve(stripe_subscription_id)
+                if not stripe_price_id:
+                    stripe_price_id = active_sub['items']['data'][0]['price']['id']
+                period_end_ts = active_sub['current_period_end']
+
+            # ── Match price to a SubscriptionTier in our DB ──
+            tier = SubscriptionTier.objects.filter(stripe_price_id=stripe_price_id).first()
+
+            if not tier:
+                # The price might be from a different account — try to match by amount
+                import logging
+                logging.getLogger(__name__).warning(
+                    f"SyncSubscription: price_id '{stripe_price_id}' not found in DB for user {user.id}. "
+                    f"Attempting to match by amount."
+                )
+                price_obj = stripe.Price.retrieve(stripe_price_id)
+                amount_cents = price_obj.get('unit_amount', 0)
+                # Match to the tier with the closest price
+                tier = SubscriptionTier.objects.filter(
+                    price=round(amount_cents / 100, 2)
+                ).first()
+
+            if not tier:
+                return Response(
+                    {'detail': f'Could not match Stripe price {stripe_price_id} to any subscription tier.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # ── Create or update the UserSubscription record ──
+            from datetime import date as _d
+            period_end = _d.fromtimestamp(period_end_ts)
+
+            obj, created = UserSubscription.objects.update_or_create(
+                user=user,
+                defaults={
+                    'tier': tier,
+                    'active_until': period_end,
+                    'renew_date': period_end,
+                    'is_active': True,
+                    'stripe_customer_id': stripe_customer_id,
+                    'stripe_subscription_id': stripe_subscription_id,
+                }
+            )
+
+            import logging
+            logging.getLogger(__name__).info(
+                f"SyncSubscription: {'created' if created else 'updated'} subscription "
+                f"for user {user.id} → {tier.label} until {period_end}"
+            )
+
+            return Response({
+                'detail': 'Subscription synced.',
+                'tier': tier.name,
+                'label': tier.label,
+                'price': str(tier.price),
+                'active_until': str(period_end),
+                'is_active': True,
+            })
+
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"SyncSubscription Error: {str(e)}")
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

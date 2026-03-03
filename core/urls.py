@@ -15,7 +15,7 @@ from .views import (
     MySwapPartnersView, ComposePartnerListView, ChatMessageDetailView,
     CreateStripeCheckoutSessionView, StripeWebhookView, ChangePlanView,
     SetupIntentView, SavedPaymentMethodsView, DeletePaymentMethodView, SetDefaultPaymentMethodView,
-    PreviewPlanChangeView,
+    PreviewPlanChangeView, SyncSubscriptionView,
 )
 from .ui_views import SlotExploreView, SlotDetailsView, SwapArrangementView
 
@@ -87,6 +87,7 @@ urlpatterns = [
     path('stripe/change-plan/', ChangePlanView.as_view(), name='stripe-change-plan'),
     path('stripe/change-plan/preview/', PreviewPlanChangeView.as_view(), name='stripe-change-plan-preview'),
     path('stripe/setup-intent/', SetupIntentView.as_view(), name='stripe-setup-intent'),
+    path('stripe/sync-subscription/', SyncSubscriptionView.as_view(), name='stripe-sync-subscription'),
     path('stripe/payment-methods/', SavedPaymentMethodsView.as_view(), name='stripe-payment-methods'),
     path('stripe/payment-methods/<str:pm_id>/', DeletePaymentMethodView.as_view(), name='stripe-delete-payment-method'),
     path('stripe/payment-methods/<str:pm_id>/set-default/', SetDefaultPaymentMethodView.as_view(), name='stripe-set-default-pm'),
