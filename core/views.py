@@ -3051,41 +3051,28 @@ class ChangePlanView(APIView):
                 return _create_checkout_session(price_id)
 
 
-            item_id = stripe_sub['items']['data'][0]['id']
+            # ── Upgrade vs Downgrade Logic ──
+            old_price = float(user_sub.tier.price) if user_sub.tier else 0
+            new_price = float(tier.price)
+            is_upgrade = new_price > old_price
 
-            # 'always_invoice' immediately charges/credits the prorated difference
-            # instead of deferring it to the next billing cycle.
+            if is_upgrade:
+                # ── Use Stripe Checkout for Upgrades (Provides Auto-Redirect) ──
+                # This opens a formal payment page that redirects back automatically
+                # after the user completes payment or card verification.
+                return _create_checkout_session(price_id)
+
+            # ── Use Background Update for Downgrades/Same-Price changes ──
+            # No immediate payment is required, so we just modify it in-place.
+            item_id = stripe_sub['items']['data'][0]['id']
             updated_sub = stripe.Subscription.modify(
                 user_sub.stripe_subscription_id,
                 items=[{'id': item_id, 'price': price_id}],
                 proration_behavior='always_invoice',
             )
 
-            # Use Stripe's real billing period end — not a hardcoded +30 days.
-            # This preserves the original billing anchor even after a mid-cycle plan change.
-            # ── Retrieve a Customer Portal URL ──
-            # Only provide the link if they are UPGRADING to a larger/more expensive plan.
-            # Otherwise, we don't return a link.
-            portal_url = None
+            # Use Stripe's real billing period end
             period_end = _safe_period_end(updated_sub)
-            old_price = float(user_sub.tier.price) if user_sub.tier else 0
-            new_price = float(tier.price)
-            is_upgrade = new_price > old_price
-
-            if is_upgrade:
-                try:
-                    portal_session = stripe.billing_portal.Session.create(
-                        customer=user_sub.stripe_customer_id,
-                        return_url="http://72.61.251.114/authorswap-frontend/subscription",
-                        flow_data={
-                            'type': 'payment_method_update'
-                        }
-                    )
-                    portal_url = portal_session.url
-                except Exception:
-                    pass  # Don't fail the plan change if portal creation fails
-
-            # Now update the local DB
             user_sub.tier = tier
             user_sub.active_until = period_end
             user_sub.renew_date = period_end
@@ -3098,8 +3085,8 @@ class ChangePlanView(APIView):
                 "label": tier.label,
                 "price": str(tier.price),
                 "active_until": str(period_end),
-                "url": portal_url,
-                "is_upgrade": is_upgrade
+                "url": None,
+                "is_upgrade": False
             })
 
         except stripe.error.InvalidRequestError as e:
