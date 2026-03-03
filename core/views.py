@@ -3126,19 +3126,31 @@ class PreviewPlanChangeView(APIView):
             sub_item_id = stripe_sub['items']['data'][0]['id']
 
             import time as _time
+            from datetime import date as _date
             proration_date = int(_time.time())
 
-            # Preview the upcoming invoice with the new price applied at 'proration_date'
-            upcoming = stripe.Invoice.upcoming(
-                customer=user_sub.stripe_customer_id,
-                subscription=user_sub.stripe_subscription_id,
-                subscription_items=[{'id': sub_item_id, 'price': price_id}],
-                subscription_proration_behavior='always_invoice',
-                subscription_proration_date=proration_date,
-            )
+            # Preview the invoice — stripe-python v14+ uses create_preview() instead of upcoming()
+            try:
+                upcoming = stripe.Invoice.create_preview(
+                    customer=user_sub.stripe_customer_id,
+                    subscription=user_sub.stripe_subscription_id,
+                    subscription_details={
+                        'items': [{'id': sub_item_id, 'price': price_id}],
+                        'proration_behavior': 'always_invoice',
+                        'proration_date': proration_date,
+                    },
+                )
+            except AttributeError:
+                # Fallback for older stripe-python versions (< v7)
+                upcoming = stripe.Invoice.upcoming(
+                    customer=user_sub.stripe_customer_id,
+                    subscription=user_sub.stripe_subscription_id,
+                    subscription_items=[{'id': sub_item_id, 'price': price_id}],
+                    subscription_proration_behavior='always_invoice',
+                    subscription_proration_date=proration_date,
+                )
 
             # Extract only the proration line items (skip recurring lines)
-            from datetime import date as _date
             line_items = []
             for line in upcoming.get('lines', {}).get('data', []):
                 if line.get('proration'):
@@ -3163,6 +3175,7 @@ class PreviewPlanChangeView(APIView):
                 "proration_date": _date.fromtimestamp(proration_date).isoformat(),
                 "line_items": line_items,
             })
+
 
         except Exception as e:
             import logging
