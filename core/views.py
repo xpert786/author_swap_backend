@@ -3054,12 +3054,25 @@ class ChangePlanView(APIView):
             user_sub.is_active = True
             user_sub.save(update_fields=['tier', 'active_until', 'renew_date', 'is_active'])
 
+            # ── Retrieve a Customer Portal URL ──
+            # This allows the user to manage their new subscription immediately on Stripe.
+            portal_url = None
+            try:
+                portal_session = stripe.billing_portal.Session.create(
+                    customer=user_sub.stripe_customer_id,
+                    return_url="http://72.61.251.114/authorswap-frontend/subscription",
+                )
+                portal_url = portal_session.url
+            except Exception:
+                pass  # Don't fail the plan change if portal creation fails
+
             return Response({
                 "detail": f"Plan changed to {tier.label} successfully.",
                 "tier": tier.name,
                 "label": tier.label,
                 "price": str(tier.price),
                 "active_until": str(period_end),
+                "url": portal_url,
             })
 
         except stripe.error.InvalidRequestError as e:
