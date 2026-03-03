@@ -3114,7 +3114,7 @@ class PreviewPlanChangeView(APIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            # Retrieve the actual subscription to get the current item and period
+            # Retrieve the actual subscription to get the billing period
             try:
                 stripe_sub = stripe.Subscription.retrieve(user_sub.stripe_subscription_id)
             except stripe.error.InvalidRequestError:
@@ -3123,58 +3123,68 @@ class PreviewPlanChangeView(APIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            sub_item_id = stripe_sub['items']['data'][0]['id']
-
-            import time as _time
             from datetime import date as _date
-            proration_date = int(_time.time())
+            import math as _math
 
-            # Preview the invoice — stripe-python v14+ uses create_preview() instead of upcoming()
-            try:
-                upcoming = stripe.Invoice.create_preview(
-                    customer=user_sub.stripe_customer_id,
-                    subscription=user_sub.stripe_subscription_id,
-                    subscription_details={
-                        'items': [{'id': sub_item_id, 'price': price_id}],
-                        'proration_behavior': 'always_invoice',
-                        'proration_date': proration_date,
-                    },
-                )
-            except AttributeError:
-                # Fallback for older stripe-python versions (< v7)
-                upcoming = stripe.Invoice.upcoming(
-                    customer=user_sub.stripe_customer_id,
-                    subscription=user_sub.stripe_subscription_id,
-                    subscription_items=[{'id': sub_item_id, 'price': price_id}],
-                    subscription_proration_behavior='always_invoice',
-                    subscription_proration_date=proration_date,
-                )
-
-            # Extract only the proration line items (skip recurring lines)
-            line_items = []
-            for line in upcoming.get('lines', {}).get('data', []):
-                if line.get('proration'):
-                    line_items.append({
-                        'description': line.get('description', ''),
-                        'amount': round(line['amount'] / 100, 2),
-                    })
-
-            amount_due = round(upcoming['amount_due'] / 100, 2)
+            # ── Manual proration calculation ────────────────────────────────────
+            # More reliable than Invoice.create_preview — not affected by
+            # customer balance credits or Stripe SDK version changes.
+            today = _date.today()
             period_end = _safe_period_end(stripe_sub)
+            remaining_days = max(0, (period_end - today).days)
+
+            # Get the real period length from Stripe if available
+            period_start_ts = None
+            try:
+                period_start_ts = getattr(stripe_sub, 'current_period_start', None) \
+                    or stripe_sub.get('current_period_start')
+            except (KeyError, TypeError, AttributeError):
+                pass
+
+            if period_start_ts:
+                period_start = _date.fromtimestamp(int(period_start_ts))
+                total_days = max(1, (period_end - period_start).days)
+            else:
+                total_days = 30
+
+            current_price = float(user_sub.tier.price)
+            new_price = float(tier.price)
+
+            # Credit = unused portion of current plan
+            credit = _math.floor((remaining_days / total_days) * current_price * 100) / 100
+            # Charge = proportional cost of new plan for remaining days
+            charge = _math.floor((remaining_days / total_days) * new_price * 100) / 100
+            # Net = what the user actually pays (negative = refund / credit)
+            net = round(charge - credit, 2)
 
             current_tier = user_sub.tier
             current_plan_label = f"{current_tier.name} - {current_tier.label} (${current_tier.price}/mo)"
             new_plan_label = f"{tier.name} - {tier.label} (${tier.price}/mo)"
 
+            line_items = [
+                {
+                    "description": f"Unused time on {current_tier.label} ({remaining_days} of {total_days} days remaining)",
+                    "amount": -credit,
+                },
+                {
+                    "description": f"Remaining time on {tier.label} ({remaining_days} of {total_days} days)",
+                    "amount": charge,
+                },
+            ]
+
             return Response({
                 "current_plan": current_plan_label,
                 "new_plan": new_plan_label,
-                "amount_due": amount_due,
-                "amount_due_display": f"-${abs(amount_due):.2f}" if amount_due < 0 else f"${amount_due:.2f}",
+                "amount_due": net,
+                "amount_due_display": f"-${abs(net):.2f}" if net < 0 else f"${net:.2f}",
                 "billing_period_end": str(period_end),
-                "proration_date": _date.fromtimestamp(proration_date).isoformat(),
+                "days_remaining": remaining_days,
+                "days_in_period": total_days,
+                "credit_from_current_plan": credit,
+                "charge_for_new_plan": charge,
                 "line_items": line_items,
             })
+
 
 
         except Exception as e:
