@@ -2738,13 +2738,21 @@ class ChangePlanView(APIView):
             return Response({"detail": "Invalid subscription tier."}, status=status.HTTP_404_NOT_FOUND)
 
         user_sub = getattr(request.user, 'subscription', None)
-        if not user_sub or not user_sub.stripe_subscription_id:
+
+        # If user has no subscription record at all, they must subscribe first via checkout.
+        # But if the record exists with no stripe_subscription_id (cleared from a stale ID),
+        # we auto-create a checkout session for them below.
+        if not user_sub:
             return Response(
-                {"detail": "No active Stripe subscription found. Please subscribe first."},
+                {"detail": "No active subscription found. Please subscribe first via the checkout flow."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        if user_sub.tier_id == tier.id:
+        # If the subscription record has no Stripe subscription ID, fall through
+        # to the checkout-session path below instead of blocking.
+        has_active_stripe_sub = bool(user_sub.stripe_subscription_id)
+
+        if has_active_stripe_sub and user_sub.tier_id == tier.id:
             return Response({"detail": "You are already on this plan."}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
@@ -2773,6 +2781,23 @@ class ChangePlanView(APIView):
                 except stripe.error.InvalidRequestError:
                     price_id = _ensure_valid_price(tier)
 
+            def _create_checkout_session(price_id):
+                """Create a fresh Stripe Checkout Session and return a Response with the URL."""
+                checkout_session = stripe.checkout.Session.create(
+                    payment_method_types=['card'],
+                    line_items=[{'price': price_id, 'quantity': 1}],
+                    mode='subscription',
+                    client_reference_id=str(request.user.id),
+                    success_url="http://72.61.251.114/authorswap-frontend/subscription",
+                    cancel_url="http://72.61.251.114/authorswap-frontend/subscription",
+                    customer_email=request.user.email,
+                )
+                return Response({'url': checkout_session.url}, status=status.HTTP_200_OK)
+
+            # No stored subscription ID — go straight to checkout
+            if not has_active_stripe_sub:
+                return _create_checkout_session(price_id)
+
             # Retrieve current subscription and its first item.
             # If the stored ID is stale (belongs to a different Stripe account),
             # clear the bad data and automatically create a fresh Checkout Session.
@@ -2787,18 +2812,8 @@ class ChangePlanView(APIView):
                 user_sub.stripe_subscription_id = None
                 user_sub.stripe_customer_id = None
                 user_sub.save(update_fields=['stripe_subscription_id', 'stripe_customer_id'])
+                return _create_checkout_session(price_id)
 
-                # Auto-create a fresh Checkout Session for the requested tier
-                checkout_session = stripe.checkout.Session.create(
-                    payment_method_types=['card'],
-                    line_items=[{'price': price_id, 'quantity': 1}],
-                    mode='subscription',
-                    client_reference_id=str(request.user.id),
-                    success_url="http://72.61.251.114/authorswap-frontend/subscription",
-                    cancel_url="http://72.61.251.114/authorswap-frontend/subscription",
-                    customer_email=request.user.email,
-                )
-                return Response({'url': checkout_session.url}, status=status.HTTP_200_OK)
 
             item_id = stripe_sub['items']['data'][0]['id']
 
