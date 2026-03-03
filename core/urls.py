@@ -13,7 +13,7 @@ from .views import (
     EmailListView, ComposeEmailView, EmailDetailView, EmailActionView,
     ChatAuthorListView, ConversationListView, ChatHistoryView, SendMessageView,
     MySwapPartnersView, ComposePartnerListView, ChatMessageDetailView,
-    CreateStripeCheckoutSessionView, StripeWebhookView
+    CreateStripeCheckoutSessionView, StripeWebhookView, ChangePlanView
 )
 from .ui_views import SlotExploreView, SlotDetailsView, SwapArrangementView
 
@@ -82,5 +82,6 @@ urlpatterns = [
 
     # Stripe
     path('stripe/create-checkout-session/', CreateStripeCheckoutSessionView.as_view(), name='stripe-create-session'),
+    path('stripe/change-plan/', ChangePlanView.as_view(), name='stripe-change-plan'),
     path('stripe/webhook/', StripeWebhookView.as_view(), name='stripe-webhook'),
 ]

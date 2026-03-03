@@ -2503,7 +2503,7 @@ class SendMessageView(APIView):
 
             sender_profile = user.profiles.first()
             sender_name = sender_profile.name if sender_profile else user.username
-            
+
             # Create persistent notification (Once)
             Notification.objects.create(
                 recipient=recipient,
@@ -2515,7 +2515,6 @@ class SendMessageView(APIView):
 
             channel_layer = get_channel_layer()
             if channel_layer:
-                # 2. Send to dedicated chat room channel
                 async_to_sync(channel_layer.group_send)(
                     f'chat_{min(user.id, recipient.id)}_{max(user.id, recipient.id)}',
                     {
@@ -2585,7 +2584,6 @@ class ChatMessageDetailView(APIView):
         return Response({"detail": "Message deleted."}, status=status.HTTP_204_NO_CONTENT)
 
 
-
 import stripe
 from django.conf import settings
 from django.views.decorators.csrf import csrf_exempt
@@ -2599,6 +2597,7 @@ class CreateStripeCheckoutSessionView(APIView):
     Expects {'tier_id': 1}
     Generates a Stripe Checkout Session URL for the specified subscription tier.
     """
+
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
@@ -2640,34 +2639,160 @@ class CreateStripeCheckoutSessionView(APIView):
                 return price.id
 
             if not price_id:
-                # No price stored yet — create a fresh one
                 price_id = _ensure_valid_price(tier)
             else:
-                # Validate the stored price against the current Stripe account.
-                # If it belongs to a different account or was deleted, recreate it.
                 try:
                     stripe.Price.retrieve(price_id)
                 except stripe.error.InvalidRequestError:
                     price_id = _ensure_valid_price(tier)
 
-            checkout_session = stripe.checkout.Session.create(
+            # ── If user already has an active subscription, use ChangePlanView logic ──
+            existing_sub = getattr(request.user, 'subscription', None)
+            if existing_sub and existing_sub.stripe_subscription_id and existing_sub.is_active:
+                # Redirect to plan-change flow instead of creating a new checkout
+                stripe_sub = stripe.Subscription.retrieve(existing_sub.stripe_subscription_id)
+                item_id = stripe_sub['items']['data'][0]['id']
+
+                stripe.Subscription.modify(
+                    existing_sub.stripe_subscription_id,
+                    items=[{'id': item_id, 'price': price_id}],
+                    proration_behavior='create_prorations',
+                )
+
+                # Update our DB record immediately
+                sub_start = datetime.now().date()
+                sub_end = sub_start + timedelta(days=30)
+                existing_sub.tier = tier
+                existing_sub.active_until = sub_end
+                existing_sub.renew_date = sub_end
+                existing_sub.is_active = True
+                existing_sub.save(update_fields=['tier', 'active_until', 'renew_date', 'is_active'])
+
+                return Response({
+                    "detail": f"Plan updated to {tier.label} successfully.",
+                    "tier": tier.name,
+                    "label": tier.label,
+                })
+
+            # ── New subscription — create a Checkout Session ──
+            checkout_kwargs = dict(
                 payment_method_types=['card'],
-                line_items=[{
-                    'price': price_id,
-                    'quantity': 1,
-                }],
+                line_items=[{'price': price_id, 'quantity': 1}],
                 mode='subscription',
                 client_reference_id=str(request.user.id),
                 success_url="http://72.61.251.114/authorswap-frontend/subscription",
                 cancel_url="http://72.61.251.114/authorswap-frontend/subscription",
-                customer_email=request.user.email
+                customer_email=request.user.email,
             )
 
+            # Re-use existing Stripe customer if available so payment methods are remembered
+            if existing_sub and existing_sub.stripe_customer_id:
+                checkout_kwargs['customer'] = existing_sub.stripe_customer_id
+                checkout_kwargs.pop('customer_email', None)
+
+            checkout_session = stripe.checkout.Session.create(**checkout_kwargs)
             return Response({'url': checkout_session.url})
 
         except Exception as e:
             import logging
             logging.getLogger(__name__).error(f"Stripe Checkout Error: {str(e)}")
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class ChangePlanView(APIView):
+    """
+    POST /api/stripe/change-plan/
+    Body: { "tier_id": <int> }
+
+    Immediately swaps the price on the user's existing Stripe subscription
+    (upgrade or downgrade) and updates the DB. No new checkout flow required.
+    Requires an active subscription with a valid stripe_subscription_id.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        stripe.api_key = settings.STRIPE_SECRET_KEY.strip()
+
+        tier_id = request.data.get('tier_id')
+        if not tier_id:
+            return Response({"detail": "tier_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            tier = SubscriptionTier.objects.get(id=tier_id)
+        except SubscriptionTier.DoesNotExist:
+            return Response({"detail": "Invalid subscription tier."}, status=status.HTTP_404_NOT_FOUND)
+
+        user_sub = getattr(request.user, 'subscription', None)
+        if not user_sub or not user_sub.stripe_subscription_id:
+            return Response(
+                {"detail": "No active Stripe subscription found. Please subscribe first."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if user_sub.tier_id == tier.id:
+            return Response({"detail": "You are already on this plan."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            price_id = tier.stripe_price_id
+
+            def _ensure_valid_price(t):
+                product = stripe.Product.create(
+                    name=f"Author Swap - {t.name}",
+                    description=t.best_for or t.name,
+                )
+                price = stripe.Price.create(
+                    product=product.id,
+                    unit_amount=int(t.price * 100),
+                    currency="usd",
+                    recurring={"interval": "month"},
+                )
+                t.stripe_price_id = price.id
+                t.save(update_fields=['stripe_price_id'])
+                return price.id
+
+            if not price_id:
+                price_id = _ensure_valid_price(tier)
+            else:
+                try:
+                    stripe.Price.retrieve(price_id)
+                except stripe.error.InvalidRequestError:
+                    price_id = _ensure_valid_price(tier)
+
+            # Retrieve current subscription and its first item
+            stripe_sub = stripe.Subscription.retrieve(user_sub.stripe_subscription_id)
+            item_id = stripe_sub['items']['data'][0]['id']
+
+            # Modify the subscription in-place (prorate the difference)
+            stripe.Subscription.modify(
+                user_sub.stripe_subscription_id,
+                items=[{'id': item_id, 'price': price_id}],
+                proration_behavior='create_prorations',
+            )
+
+            # Update the DB record immediately — don't wait for webhook
+            sub_start = datetime.now().date()
+            sub_end = sub_start + timedelta(days=30)
+            user_sub.tier = tier
+            user_sub.active_until = sub_end
+            user_sub.renew_date = sub_end
+            user_sub.is_active = True
+            user_sub.save(update_fields=['tier', 'active_until', 'renew_date', 'is_active'])
+
+            return Response({
+                "detail": f"Plan changed to {tier.label} successfully.",
+                "tier": tier.name,
+                "label": tier.label,
+                "price": str(tier.price),
+                "active_until": str(sub_end),
+            })
+
+        except stripe.error.InvalidRequestError as e:
+            import logging
+            logging.getLogger(__name__).error(f"Stripe ChangePlan Error: {str(e)}")
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"Stripe ChangePlan Error: {str(e)}")
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -2704,15 +2829,17 @@ class StripeWebhookView(APIView):
                 stripe.api_key = settings.STRIPE_SECRET_KEY.strip()
                 event = stripe.Event.construct_from(json.loads(payload), stripe.api_key)
 
-        except ValueError as e:
+        except ValueError:
             # Invalid payload
             return Response(status=status.HTTP_400_BAD_REQUEST)
-        except stripe.error.SignatureVerificationError as e:
+        except stripe.error.SignatureVerificationError:
             # Invalid signature
             return Response(status=status.HTTP_400_BAD_REQUEST)
 
-        # Handle the checkout.session.completed event
-        if event['type'] == 'checkout.session.completed':
+        event_type = event['type']
+
+        # ── New subscription created via Checkout ──
+        if event_type == 'checkout.session.completed':
             session = event['data']['object']
 
             # Retrieve the user ID from the client_reference_id
@@ -2749,9 +2876,57 @@ class StripeWebhookView(APIView):
                             )
                 except Exception as e:
                     import logging
-                    logging.getLogger(__name__).error(f"Webhook processing error: {e}")
+                    logging.getLogger(__name__).error(f"Webhook checkout.session.completed error: {e}")
 
-        # You might also want to handle 'invoice.payment_succeeded', 'invoice.payment_failed', 'customer.subscription.deleted' mapping to is_active flags
+        # ── Plan changed directly on Stripe subscription (upgrade/downgrade) ──
+        elif event_type == 'customer.subscription.updated':
+            stripe_sub = event['data']['object']
+            stripe_subscription_id = stripe_sub['id']
+            stripe_customer_id = stripe_sub['customer']
+
+            try:
+                # Get the new price from the first subscription item
+                price_id = stripe_sub['items']['data'][0]['price']['id']
+                tier = SubscriptionTier.objects.filter(stripe_price_id=price_id).first()
+
+                user_sub = UserSubscription.objects.filter(
+                    stripe_subscription_id=stripe_subscription_id
+                ).first()
+
+                if not user_sub:
+                    # Try to find by customer ID
+                    user_sub = UserSubscription.objects.filter(
+                        stripe_customer_id=stripe_customer_id
+                    ).first()
+
+                if user_sub and tier:
+                    sub_start = datetime.now().date()
+                    sub_end = sub_start + timedelta(days=30)
+                    user_sub.tier = tier
+                    user_sub.active_until = sub_end
+                    user_sub.renew_date = sub_end
+                    user_sub.is_active = True
+                    user_sub.stripe_subscription_id = stripe_subscription_id
+                    user_sub.save(update_fields=[
+                        'tier', 'active_until', 'renew_date', 'is_active', 'stripe_subscription_id'
+                    ])
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).error(f"Webhook customer.subscription.updated error: {e}")
+
+        # ── Subscription cancelled / expired ──
+        elif event_type == 'customer.subscription.deleted':
+            stripe_sub = event['data']['object']
+            stripe_subscription_id = stripe_sub['id']
+            try:
+                user_sub = UserSubscription.objects.filter(
+                    stripe_subscription_id=stripe_subscription_id
+                ).first()
+                if user_sub:
+                    user_sub.is_active = False
+                    user_sub.save(update_fields=['is_active'])
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).error(f"Webhook customer.subscription.deleted error: {e}")
 
         return Response(status=status.HTTP_200_OK)
-
