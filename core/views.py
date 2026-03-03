@@ -1232,9 +1232,9 @@ class SubscriberVerificationView(APIView):
         verification, _ = SubscriberVerification.objects.get_or_create(user=request.user)
         subscription = UserSubscription.objects.filter(user=request.user, is_active=True).first()
 
-        # ── Auto-sync from Stripe if no local active subscription record exists ──
-        if not subscription:
-            subscription = _sync_user_subscription_from_stripe(request.user)
+        # ── Proactively sync from Stripe to catch any recent Checkout completions ──
+        # This ensures that upgrades (which create NEW subscriptions) are caught immediately.
+        subscription = _sync_user_subscription_from_stripe(request.user) or subscription
 
         tiers = SubscriptionTier.objects.all().order_by('price')
 
@@ -2754,43 +2754,56 @@ def _sync_user_subscription_from_stripe(user):
         if not stripe_customer_id:
             return None
 
-        # 2. Look for active or trialing subscriptions
+        # 2. Look for ALL active or trialing subscriptions
         subs = stripe.Subscription.list(
             customer=stripe_customer_id, 
-            status='all', # filter manually to be safe
-            limit=5
+            status='all', 
+            limit=10,
+            expand=['data.items.data.price']
         )
-        active_sub = None
+        
+        candidates = []
         for s in subs.data:
             if s.status in ('active', 'trialing'):
-                active_sub = s
-                break
-        
-        if not active_sub:
+                # Match price to Tier
+                price_id = s['items']['data'][0]['price']['id']
+                tier = SubscriptionTier.objects.filter(stripe_price_id=price_id).first()
+                if not tier:
+                    # Fallback by amount
+                    p_obj = s['items']['data'][0]['price']
+                    tier = SubscriptionTier.objects.filter(price=round(p_obj.unit_amount/100, 2)).first()
+                
+                if tier:
+                    candidates.append((tier, s))
+
+        if not candidates:
             return None
 
-        # 3. Match price to Tier
-        price_id = active_sub['items']['data'][0]['price']['id']
-        tier = SubscriptionTier.objects.filter(stripe_price_id=price_id).first()
-        if not tier:
-            # Fallback by amount
-            p_obj = stripe.Price.retrieve(price_id)
-            tier = SubscriptionTier.objects.filter(price=round(p_obj.unit_amount/100, 2)).first()
+        # 3. Aggressive Logic: Pick the HIGHEST tier among active ones
+        # This handles the case where user paid for an upgrade but old sub is still active.
+        candidates.sort(key=lambda x: x[0].price, reverse=True)
+        winner_tier, winner_sub = candidates[0]
 
-        if not tier:
-            return None
+        # 4. Clean up: Cancel any other active subscriptions to prevent double-billing
+        for tier, sub in candidates[1:]:
+            try:
+                stripe.Subscription.delete(sub.id) # Immediate cancel
+                import logging
+                logging.getLogger(__name__).info(f"Sync: Cancelled duplicate lower-tier sub {sub.id} for user {user.id}")
+            except Exception:
+                pass
 
-        # 4. Sync DB
-        period_end = _safe_period_end(active_sub)
+        # 5. Sync DB
+        period_end = _safe_period_end(winner_sub)
         obj, _ = UserSubscription.objects.update_or_create(
             user=user,
             defaults={
-                'tier': tier,
+                'tier': winner_tier,
                 'active_until': period_end,
                 'renew_date': period_end,
                 'is_active': True,
                 'stripe_customer_id': stripe_customer_id,
-                'stripe_subscription_id': active_sub.id,
+                'stripe_subscription_id': winner_sub.id,
             }
         )
         return obj
