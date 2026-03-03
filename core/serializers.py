@@ -151,6 +151,7 @@ class BookSerializer(serializers.ModelSerializer):
         default=list
     )
     rating = serializers.FloatField(allow_null=True, default=0.0)
+    swap_count = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = Book
@@ -164,6 +165,10 @@ class BookSerializer(serializers.ModelSerializer):
             'barnes_noble_url': {'required': True},
             'availability': {'required': True},
         }
+
+    def get_swap_count(self, obj):
+        """Return the total number of swap requests this book has been involved in."""
+        return obj.swap_requests.count()
 
     def validate_subgenres(self, value):
         # Value is already a list due to ListField
