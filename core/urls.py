@@ -13,7 +13,9 @@ from .views import (
     EmailListView, ComposeEmailView, EmailDetailView, EmailActionView,
     ChatAuthorListView, ConversationListView, ChatHistoryView, SendMessageView,
     MySwapPartnersView, ComposePartnerListView, ChatMessageDetailView,
-    CreateStripeCheckoutSessionView, StripeWebhookView, ChangePlanView
+    CreateStripeCheckoutSessionView, StripeWebhookView, ChangePlanView,
+    SetupIntentView, SavedPaymentMethodsView, DeletePaymentMethodView, SetDefaultPaymentMethodView,
+    PreviewPlanChangeView,
 )
 from .ui_views import SlotExploreView, SlotDetailsView, SwapArrangementView
 
@@ -83,5 +85,10 @@ urlpatterns = [
     # Stripe
     path('stripe/create-checkout-session/', CreateStripeCheckoutSessionView.as_view(), name='stripe-create-session'),
     path('stripe/change-plan/', ChangePlanView.as_view(), name='stripe-change-plan'),
+    path('stripe/change-plan/preview/', PreviewPlanChangeView.as_view(), name='stripe-change-plan-preview'),
+    path('stripe/setup-intent/', SetupIntentView.as_view(), name='stripe-setup-intent'),
+    path('stripe/payment-methods/', SavedPaymentMethodsView.as_view(), name='stripe-payment-methods'),
+    path('stripe/payment-methods/<str:pm_id>/', DeletePaymentMethodView.as_view(), name='stripe-delete-payment-method'),
+    path('stripe/payment-methods/<str:pm_id>/set-default/', SetDefaultPaymentMethodView.as_view(), name='stripe-set-default-pm'),
     path('stripe/webhook/', StripeWebhookView.as_view(), name='stripe-webhook'),
 ]

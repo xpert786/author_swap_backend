@@ -2591,6 +2591,85 @@ from django.utils.decorators import method_decorator
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Stripe shared helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _get_or_create_stripe_customer(user, user_sub):
+    """
+    Ensure the user has a valid Stripe Customer on the current Stripe account.
+    Creates a new one if missing or stale (from a different account).
+    Persists the customer ID back to user_sub if provided.
+    Returns: stripe_customer_id (str)
+    """
+    customer_id = user_sub.stripe_customer_id if user_sub else None
+
+    if customer_id:
+        try:
+            stripe.Customer.retrieve(customer_id)
+            return customer_id          # still valid
+        except stripe.error.InvalidRequestError:
+            customer_id = None          # stale — fall through to create
+
+    # Create a brand-new customer
+    customer = stripe.Customer.create(
+        email=user.email,
+        name=user.get_full_name() or user.username,
+        metadata={'user_id': str(user.id)},
+    )
+    customer_id = customer.id
+
+    if user_sub:
+        user_sub.stripe_customer_id = customer_id
+        user_sub.save(update_fields=['stripe_customer_id'])
+
+    return customer_id
+
+
+def _apply_unused_credit(user_sub, stripe_customer_id):
+    """
+    Calculate the prorated credit owed to the user from unused days on their
+    current plan and post it as a Customer Balance Transaction in Stripe.
+
+    Stripe Checkout automatically deducts a negative customer balance from the
+    amount shown and charged — so the user sees only what they actually owe.
+
+    Returns: credit_cents (int)  — 0 if no credit applies.
+    """
+    from datetime import date as _d
+    import math
+
+    if not user_sub or not user_sub.active_until or not user_sub.tier:
+        return 0
+
+    today = _d.today()
+    active_until = user_sub.active_until
+
+    if active_until <= today:
+        return 0           # subscription already expired — no credit
+
+    remaining_days = (active_until - today).days
+    # Use 30-day billing period as the base (standard monthly billing)
+    tier_price_cents = int(float(user_sub.tier.price) * 100)
+    daily_rate_cents = tier_price_cents / 30.0
+    credit_cents = math.floor(remaining_days * daily_rate_cents)
+
+    if credit_cents <= 0:
+        return 0
+
+    # Apply as a negative balance transaction (credit)
+    stripe.Customer.create_balance_transaction(
+        stripe_customer_id,
+        amount=-credit_cents,           # negative = credit toward next charge
+        currency='usd',
+        description=(
+            f'Proration credit: {remaining_days} unused days '
+            f'on {user_sub.tier.label} plan (${user_sub.tier.price}/mo)'
+        ),
+    )
+    return credit_cents
+
+
 class CreateStripeCheckoutSessionView(APIView):
     """
     POST /api/stripe/create-checkout-session/
@@ -2656,18 +2735,20 @@ class CreateStripeCheckoutSessionView(APIView):
                     stripe_sub = stripe.Subscription.retrieve(existing_sub.stripe_subscription_id)
                     item_id = stripe_sub['items']['data'][0]['id']
 
-                    stripe.Subscription.modify(
+                    # 'always_invoice' immediately charges/credits the prorated difference
+                    # instead of deferring it to the next billing cycle.
+                    updated_sub = stripe.Subscription.modify(
                         existing_sub.stripe_subscription_id,
                         items=[{'id': item_id, 'price': price_id}],
-                        proration_behavior='create_prorations',
+                        proration_behavior='always_invoice',
                     )
 
-                    # Update our DB record immediately
-                    sub_start = datetime.now().date()
-                    sub_end = sub_start + timedelta(days=30)
+                    # Use Stripe's real billing cycle end (not a hardcoded +30 days)
+                    from datetime import date as _date
+                    period_end = _date.fromtimestamp(updated_sub['current_period_end'])
                     existing_sub.tier = tier
-                    existing_sub.active_until = sub_end
-                    existing_sub.renew_date = sub_end
+                    existing_sub.active_until = period_end
+                    existing_sub.renew_date = period_end
                     existing_sub.is_active = True
                     existing_sub.save(update_fields=['tier', 'active_until', 'renew_date', 'is_active'])
 
@@ -2675,6 +2756,7 @@ class CreateStripeCheckoutSessionView(APIView):
                         "detail": f"Plan updated to {tier.label} successfully.",
                         "tier": tier.name,
                         "label": tier.label,
+                        "active_until": str(period_end),
                     })
 
                 except stripe.error.InvalidRequestError:
@@ -2690,20 +2772,29 @@ class CreateStripeCheckoutSessionView(APIView):
                     existing_sub.save(update_fields=['stripe_subscription_id', 'stripe_customer_id'])
 
             # ── New subscription — create a Checkout Session ──
+            # Always get or create a Stripe Customer so:
+            #  (a) saved payment methods are remembered
+            #  (b) any proration credit is tied to the customer
+            from datetime import date as _d
+            existing_sub = existing_sub  # already retrieved above
+
+            cust_id = _get_or_create_stripe_customer(request.user, existing_sub)
+
+            # If the user had an active subscription (even if stale), apply the
+            # unused-days credit to the customer balance so Stripe Checkout
+            # shows and charges only the net amount owed.
+            if existing_sub and existing_sub.is_active:
+                _apply_unused_credit(existing_sub, cust_id)
+
             checkout_kwargs = dict(
                 payment_method_types=['card'],
                 line_items=[{'price': price_id, 'quantity': 1}],
                 mode='subscription',
                 client_reference_id=str(request.user.id),
+                customer=cust_id,       # customer balance (credit) auto-applied
                 success_url="http://72.61.251.114/authorswap-frontend/subscription",
                 cancel_url="http://72.61.251.114/authorswap-frontend/subscription",
-                customer_email=request.user.email,
             )
-
-            # Re-use existing Stripe customer if available so payment methods are remembered
-            if existing_sub and existing_sub.stripe_customer_id:
-                checkout_kwargs['customer'] = existing_sub.stripe_customer_id
-                checkout_kwargs.pop('customer_email', None)
 
             checkout_session = stripe.checkout.Session.create(**checkout_kwargs)
             return Response({'url': checkout_session.url})
@@ -2782,15 +2873,27 @@ class ChangePlanView(APIView):
                     price_id = _ensure_valid_price(tier)
 
             def _create_checkout_session(price_id):
-                """Create a fresh Stripe Checkout Session and return a Response with the URL."""
+                """
+                Create a fresh Stripe Checkout Session with proration credit applied.
+                Gets/creates a Stripe Customer, applies unused-days credit to their
+                balance, then creates the session — Stripe Checkout will display and
+                deduct the credit automatically so the user pays only what they owe.
+                """
+                cust_id = _get_or_create_stripe_customer(request.user, user_sub)
+
+                # Apply the unused-days credit from the current plan so the user
+                # isn't charged the full new-plan price on the checkout page.
+                if user_sub and user_sub.is_active:
+                    _apply_unused_credit(user_sub, cust_id)
+
                 checkout_session = stripe.checkout.Session.create(
                     payment_method_types=['card'],
                     line_items=[{'price': price_id, 'quantity': 1}],
                     mode='subscription',
                     client_reference_id=str(request.user.id),
+                    customer=cust_id,   # balance credit auto-applied on checkout
                     success_url="http://72.61.251.114/authorswap-frontend/subscription",
                     cancel_url="http://72.61.251.114/authorswap-frontend/subscription",
-                    customer_email=request.user.email,
                 )
                 return Response({'url': checkout_session.url}, status=status.HTTP_200_OK)
 
@@ -2817,19 +2920,21 @@ class ChangePlanView(APIView):
 
             item_id = stripe_sub['items']['data'][0]['id']
 
-            # Modify the subscription in-place (prorate the difference)
-            stripe.Subscription.modify(
+            # 'always_invoice' immediately charges/credits the prorated difference
+            # instead of deferring it to the next billing cycle.
+            updated_sub = stripe.Subscription.modify(
                 user_sub.stripe_subscription_id,
                 items=[{'id': item_id, 'price': price_id}],
-                proration_behavior='create_prorations',
+                proration_behavior='always_invoice',
             )
 
-            # Update the DB record immediately — don't wait for webhook
-            sub_start = datetime.now().date()
-            sub_end = sub_start + timedelta(days=30)
+            # Use Stripe's real billing period end — not a hardcoded +30 days.
+            # This preserves the original billing anchor even after a mid-cycle plan change.
+            from datetime import date as _date
+            period_end = _date.fromtimestamp(updated_sub['current_period_end'])
             user_sub.tier = tier
-            user_sub.active_until = sub_end
-            user_sub.renew_date = sub_end
+            user_sub.active_until = period_end
+            user_sub.renew_date = period_end
             user_sub.is_active = True
             user_sub.save(update_fields=['tier', 'active_until', 'renew_date', 'is_active'])
 
@@ -2838,7 +2943,7 @@ class ChangePlanView(APIView):
                 "tier": tier.name,
                 "label": tier.label,
                 "price": str(tier.price),
-                "active_until": str(sub_end),
+                "active_until": str(period_end),
             })
 
         except stripe.error.InvalidRequestError as e:
@@ -2851,11 +2956,128 @@ class ChangePlanView(APIView):
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+class PreviewPlanChangeView(APIView):
+    """
+    POST /api/stripe/change-plan/preview/
+    Body: { "tier_id": <int> }
+
+    Returns the prorated amount the user will be charged (or credited) if they
+    switch to the given tier RIGHT NOW — without actually making the change.
+
+    Response:
+        {
+            "current_plan":  "Tier 3 - Growth ($48.99/mo)",
+            "new_plan":      "Tier 2 - Starter ($28.99/mo)",
+            "amount_due":    -18.67,          # negative = credit/refund
+            "amount_due_display": "-$18.67",
+            "billing_period_end": "2026-04-02",
+            "proration_date": "2026-03-03",
+            "line_items": [
+                {"description": "Unused time on Growth...", "amount": -45.72},
+                {"description": "Remaining time on Starter...", "amount": 27.05}
+            ]
+        }
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        stripe.api_key = settings.STRIPE_SECRET_KEY.strip()
+
+        tier_id = request.data.get('tier_id')
+        if not tier_id:
+            return Response({"detail": "tier_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            tier = SubscriptionTier.objects.get(id=tier_id)
+        except SubscriptionTier.DoesNotExist:
+            return Response({"detail": "Invalid subscription tier."}, status=status.HTTP_404_NOT_FOUND)
+
+        user_sub = getattr(request.user, 'subscription', None)
+        if not user_sub or not user_sub.stripe_subscription_id or not user_sub.stripe_customer_id:
+            return Response(
+                {"detail": "No active subscription to preview changes for."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            price_id = tier.stripe_price_id
+            if not price_id:
+                return Response(
+                    {"detail": "This tier has no Stripe price configured yet."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # Validate price ID
+            try:
+                stripe.Price.retrieve(price_id)
+            except stripe.error.InvalidRequestError:
+                return Response(
+                    {"detail": "Price for this tier is invalid. Please contact support."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # Retrieve the actual subscription to get the current item and period
+            try:
+                stripe_sub = stripe.Subscription.retrieve(user_sub.stripe_subscription_id)
+            except stripe.error.InvalidRequestError:
+                return Response(
+                    {"detail": "No valid Stripe subscription found. Please use the checkout flow."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            sub_item_id = stripe_sub['items']['data'][0]['id']
+
+            import time as _time
+            proration_date = int(_time.time())
+
+            # Preview the upcoming invoice with the new price applied at 'proration_date'
+            upcoming = stripe.Invoice.upcoming(
+                customer=user_sub.stripe_customer_id,
+                subscription=user_sub.stripe_subscription_id,
+                subscription_items=[{'id': sub_item_id, 'price': price_id}],
+                subscription_proration_behavior='always_invoice',
+                subscription_proration_date=proration_date,
+            )
+
+            # Extract only the proration line items (skip recurring lines)
+            from datetime import date as _date
+            line_items = []
+            for line in upcoming.get('lines', {}).get('data', []):
+                if line.get('proration'):
+                    line_items.append({
+                        'description': line.get('description', ''),
+                        'amount': round(line['amount'] / 100, 2),
+                    })
+
+            amount_due = round(upcoming['amount_due'] / 100, 2)
+            period_end = _date.fromtimestamp(stripe_sub['current_period_end'])
+
+            current_tier = user_sub.tier
+            current_plan_label = f"{current_tier.name} - {current_tier.label} (${current_tier.price}/mo)"
+            new_plan_label = f"{tier.name} - {tier.label} (${tier.price}/mo)"
+
+            return Response({
+                "current_plan": current_plan_label,
+                "new_plan": new_plan_label,
+                "amount_due": amount_due,
+                "amount_due_display": f"-${abs(amount_due):.2f}" if amount_due < 0 else f"${amount_due:.2f}",
+                "billing_period_end": str(period_end),
+                "proration_date": _date.fromtimestamp(proration_date).isoformat(),
+                "line_items": line_items,
+            })
+
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"PreviewPlanChange Error: {str(e)}")
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 @method_decorator(csrf_exempt, name='dispatch')
 class StripeWebhookView(APIView):
     """
     POST /api/stripe/webhook/
     Listens for Stripe webhooks to update subscription status.
+
     """
     # Disable global auth/CSRF for webhooks as it uses Stripe signature
     authentication_classes = []
@@ -2985,3 +3207,252 @@ class StripeWebhookView(APIView):
                 logging.getLogger(__name__).error(f"Webhook customer.subscription.deleted error: {e}")
 
         return Response(status=status.HTTP_200_OK)
+
+
+# =====================================================================
+# STRIPE — CARD SAVE / PAYMENT METHOD MANAGEMENT
+# =====================================================================
+
+class SetupIntentView(APIView):
+    """
+    POST /api/stripe/setup-intent/
+
+    Creates (or reuses) a Stripe Customer for the authenticated user,
+    then creates a SetupIntent so the frontend can securely collect and
+    save the user's card using Stripe.js / Stripe Elements.
+
+    Response:
+        {
+            "client_secret": "seti_xxx_secret_xxx",
+            "customer_id":   "cus_xxx"
+        }
+
+    Frontend usage (Stripe.js):
+        const { error, setupIntent } = await stripe.confirmCardSetup(client_secret, {
+            payment_method: { card: cardElement }
+        });
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        stripe.api_key = settings.STRIPE_SECRET_KEY.strip()
+
+        try:
+            user = request.user
+            user_sub = getattr(user, 'subscription', None)
+
+            # ── Ensure the user has a Stripe Customer ──
+            stripe_customer_id = user_sub.stripe_customer_id if user_sub else None
+
+            if stripe_customer_id:
+                # Validate the stored customer ID against the current Stripe account
+                try:
+                    stripe.Customer.retrieve(stripe_customer_id)
+                except stripe.error.InvalidRequestError:
+                    # Stale customer from a different Stripe account → create a new one
+                    stripe_customer_id = None
+
+            if not stripe_customer_id:
+                customer = stripe.Customer.create(
+                    email=user.email,
+                    name=user.get_full_name() or user.username,
+                    metadata={'user_id': str(user.id)},
+                )
+                stripe_customer_id = customer.id
+
+                # Persist the new customer ID
+                if user_sub:
+                    user_sub.stripe_customer_id = stripe_customer_id
+                    user_sub.save(update_fields=['stripe_customer_id'])
+
+            # ── Create a SetupIntent attached to the customer ──
+            setup_intent = stripe.SetupIntent.create(
+                customer=stripe_customer_id,
+                payment_method_types=['card'],
+                usage='off_session',   # card can be charged later without the user present
+            )
+
+            return Response({
+                'client_secret': setup_intent.client_secret,
+                'customer_id': stripe_customer_id,
+            })
+
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"SetupIntent Error: {str(e)}")
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class SavedPaymentMethodsView(APIView):
+    """
+    GET /api/stripe/payment-methods/
+
+    Returns the list of saved cards for the authenticated user.
+
+    Response:
+        [
+            {
+                "id":       "pm_xxx",
+                "brand":    "visa",
+                "last4":    "4242",
+                "exp_month": 12,
+                "exp_year":  2027,
+                "is_default": true
+            },
+            ...
+        ]
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        stripe.api_key = settings.STRIPE_SECRET_KEY.strip()
+
+        try:
+            user_sub = getattr(request.user, 'subscription', None)
+            stripe_customer_id = user_sub.stripe_customer_id if user_sub else None
+
+            if not stripe_customer_id:
+                return Response([])
+
+            # Validate the customer ID
+            try:
+                customer = stripe.Customer.retrieve(stripe_customer_id)
+            except stripe.error.InvalidRequestError:
+                return Response([])
+
+            # Fetch all saved card payment methods
+            payment_methods = stripe.PaymentMethod.list(
+                customer=stripe_customer_id,
+                type='card',
+            )
+
+            # Determine the default payment method
+            default_pm_id = None
+            if customer.get('invoice_settings'):
+                default_pm_id = customer['invoice_settings'].get('default_payment_method')
+
+            result = []
+            for pm in payment_methods.data:
+                card = pm.get('card', {})
+                result.append({
+                    'id':        pm.id,
+                    'brand':     card.get('brand', ''),
+                    'last4':     card.get('last4', ''),
+                    'exp_month': card.get('exp_month'),
+                    'exp_year':  card.get('exp_year'),
+                    'is_default': pm.id == default_pm_id,
+                })
+
+            return Response(result)
+
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"SavedPaymentMethods Error: {str(e)}")
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class DeletePaymentMethodView(APIView):
+    """
+    DELETE /api/stripe/payment-methods/<pm_id>/
+
+    Detaches (removes) a saved card from the user's Stripe Customer.
+    Only the owner of the payment method can delete it.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request, pm_id):
+        stripe.api_key = settings.STRIPE_SECRET_KEY.strip()
+
+        try:
+            user_sub = getattr(request.user, 'subscription', None)
+            stripe_customer_id = user_sub.stripe_customer_id if user_sub else None
+
+            if not stripe_customer_id:
+                return Response(
+                    {'detail': 'No Stripe customer found for this account.'},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+            # Verify the payment method belongs to this customer before detaching
+            try:
+                pm = stripe.PaymentMethod.retrieve(pm_id)
+            except stripe.error.InvalidRequestError:
+                return Response(
+                    {'detail': 'Payment method not found.'},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+            if pm.get('customer') != stripe_customer_id:
+                return Response(
+                    {'detail': 'You do not own this payment method.'},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+            stripe.PaymentMethod.detach(pm_id)
+            return Response({'detail': 'Card removed successfully.'}, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"DeletePaymentMethod Error: {str(e)}")
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class SetDefaultPaymentMethodView(APIView):
+    """
+    POST /api/stripe/payment-methods/<pm_id>/set-default/
+
+    Sets the specified payment method as the default for the user's
+    Stripe Customer (used for future subscription renewals).
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pm_id):
+        stripe.api_key = settings.STRIPE_SECRET_KEY.strip()
+
+        try:
+            user_sub = getattr(request.user, 'subscription', None)
+            stripe_customer_id = user_sub.stripe_customer_id if user_sub else None
+
+            if not stripe_customer_id:
+                return Response(
+                    {'detail': 'No Stripe customer found for this account.'},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+            # Verify ownership
+            try:
+                pm = stripe.PaymentMethod.retrieve(pm_id)
+            except stripe.error.InvalidRequestError:
+                return Response(
+                    {'detail': 'Payment method not found.'},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+            if pm.get('customer') != stripe_customer_id:
+                return Response(
+                    {'detail': 'You do not own this payment method.'},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+            # Set as default on the Customer
+            stripe.Customer.modify(
+                stripe_customer_id,
+                invoice_settings={'default_payment_method': pm_id},
+            )
+
+            # Also update the subscription's default payment method if one exists
+            if user_sub and user_sub.stripe_subscription_id:
+                try:
+                    stripe.Subscription.modify(
+                        user_sub.stripe_subscription_id,
+                        default_payment_method=pm_id,
+                    )
+                except stripe.error.InvalidRequestError:
+                    pass  # Stale subscription — ignore
+
+            return Response({'detail': 'Default card updated successfully.'})
+
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"SetDefaultPaymentMethod Error: {str(e)}")
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
