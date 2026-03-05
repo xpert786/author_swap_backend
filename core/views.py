@@ -3397,6 +3397,16 @@ class StripeWebhookView(APIView):
 # STRIPE — CARD SAVE / PAYMENT METHOD MANAGEMENT
 # =====================================================================
 
+def _get_stripe_customer_id(user):
+    """Resolve the Stripe customer ID from UserSubscription or UserProfile fallback."""
+    user_sub = getattr(user, 'subscription', None)
+    if user_sub and user_sub.stripe_customer_id:
+        return user_sub.stripe_customer_id
+    try:
+        return user.profile.stripe_customer_id or None
+    except Exception:
+        return None
+
 class SetupIntentView(APIView):
     """
     POST /api/stripe/setup-intent/
@@ -3512,8 +3522,7 @@ class SavedPaymentMethodsView(APIView):
         stripe.api_key = settings.STRIPE_SECRET_KEY.strip()
 
         try:
-            user_sub = getattr(request.user, 'subscription', None)
-            stripe_customer_id = user_sub.stripe_customer_id if user_sub else None
+            stripe_customer_id = _get_stripe_customer_id(request.user)
 
             if not stripe_customer_id:
                 return Response([])
@@ -3568,8 +3577,7 @@ class DeletePaymentMethodView(APIView):
         stripe.api_key = settings.STRIPE_SECRET_KEY.strip()
 
         try:
-            user_sub = getattr(request.user, 'subscription', None)
-            stripe_customer_id = user_sub.stripe_customer_id if user_sub else None
+            stripe_customer_id = _get_stripe_customer_id(request.user)
 
             if not stripe_customer_id:
                 return Response(
@@ -3615,7 +3623,7 @@ class SetDefaultPaymentMethodView(APIView):
 
         try:
             user_sub = getattr(request.user, 'subscription', None)
-            stripe_customer_id = user_sub.stripe_customer_id if user_sub else None
+            stripe_customer_id = _get_stripe_customer_id(request.user)
 
             if not stripe_customer_id:
                 return Response(
