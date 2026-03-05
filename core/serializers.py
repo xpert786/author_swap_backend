@@ -1261,8 +1261,9 @@ class ChatMessageSerializer(serializers.ModelSerializer):
         return None
 
     def get_formatted_time(self, obj):
-        return obj.created_at.strftime("%I:%M %p")
-
+        import pytz
+        ist = pytz.timezone('Asia/Kolkata')
+        return obj.created_at.astimezone(ist).strftime("%I:%M %p")
     def get_is_mine(self, obj):
         request = self.context.get('request')
         if request:
