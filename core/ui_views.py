@@ -20,8 +20,8 @@ class SlotExploreView(ListAPIView):
     search_fields = ['user__profiles__name', 'preferred_genre']
 
     def get_queryset(self):
-        # Showing all slots so you can get the data as requested
-        return NewsletterSlot.objects.all().order_by('send_date')
+        # Exclude the logged-in user's own slots from the explore feed
+        return NewsletterSlot.objects.exclude(user=self.request.user).order_by('send_date')
 
 class SlotDetailsView(RetrieveUpdateAPIView):
     """
