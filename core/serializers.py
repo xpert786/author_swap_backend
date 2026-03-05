@@ -961,6 +961,7 @@ class EmailListSerializer(serializers.ModelSerializer):
     sender_name = serializers.SerializerMethodField()
     sender_profile_picture = serializers.SerializerMethodField()
     recipient_name = serializers.SerializerMethodField()
+    recipient_profile_picture = serializers.SerializerMethodField()
     formatted_date = serializers.SerializerMethodField()
     snippet = serializers.SerializerMethodField()
     reply_count = serializers.SerializerMethodField()
@@ -970,7 +971,7 @@ class EmailListSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'subject', 'body', 'attachment', 'snippet', 'folder', 'is_read', 'is_starred', 'is_draft',
             'sender_name', 'sender_profile_picture',
-            'recipient_name',
+            'recipient_name', 'recipient_profile_picture',
             'formatted_date', 'sent_at', 'created_at',
             'reply_count',
         ]
@@ -1002,6 +1003,25 @@ class EmailListSerializer(serializers.ModelSerializer):
         profile = obj.recipient.profiles.first()
         return profile.name if profile else obj.recipient.username
 
+    def get_recipient_profile_picture(self, obj):
+        if not obj.recipient:
+            return None
+        request = self.context.get('request')
+        # Try core.Profile first
+        profile = obj.recipient.profiles.first()
+        if profile and profile.profile_picture:
+            url = profile.profile_picture.url
+            return request.build_absolute_uri(url) if request else url
+        # Fall back to authentication.UserProfile
+        try:
+            auth_profile = obj.recipient.profile
+            if auth_profile and auth_profile.profile_photo:
+                url = auth_profile.profile_photo.url
+                return request.build_absolute_uri(url) if request else url
+        except Exception:
+            pass
+        return None
+
     def get_formatted_date(self, obj):
         import pytz
         from django.utils import timezone
@@ -1032,6 +1052,7 @@ class EmailDetailSerializer(serializers.ModelSerializer):
     sender_profile_picture = serializers.SerializerMethodField()
     recipient_name = serializers.SerializerMethodField()
     recipient_email = serializers.SerializerMethodField()
+    recipient_profile_picture = serializers.SerializerMethodField()
     formatted_date = serializers.SerializerMethodField()
     replies = serializers.SerializerMethodField()
 
@@ -1040,7 +1061,7 @@ class EmailDetailSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'subject', 'body', 'folder', 'is_read', 'is_starred', 'is_draft',
             'sender_name', 'sender_profile_picture',
-            'recipient_name', 'recipient_email',
+            'recipient_name', 'recipient_email', 'recipient_profile_picture',
             'attachment',
             'formatted_date', 'sent_at', 'created_at',
             'parent_email', 'replies',
@@ -1077,6 +1098,25 @@ class EmailDetailSerializer(serializers.ModelSerializer):
         if not obj.recipient:
             return None
         return obj.recipient.email
+
+    def get_recipient_profile_picture(self, obj):
+        if not obj.recipient:
+            return None
+        request = self.context.get('request')
+        # Try core.Profile first
+        profile = obj.recipient.profiles.first()
+        if profile and profile.profile_picture:
+            url = profile.profile_picture.url
+            return request.build_absolute_uri(url) if request else url
+        # Fall back to authentication.UserProfile
+        try:
+            auth_profile = obj.recipient.profile
+            if auth_profile and auth_profile.profile_photo:
+                url = auth_profile.profile_photo.url
+                return request.build_absolute_uri(url) if request else url
+        except Exception:
+            pass
+        return None
 
     def get_formatted_date(self, obj):
         import pytz
