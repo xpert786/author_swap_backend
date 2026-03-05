@@ -980,12 +980,20 @@ class EmailListSerializer(serializers.ModelSerializer):
         return profile.name if profile else obj.sender.username
 
     def get_sender_profile_picture(self, obj):
+        request = self.context.get('request')
+        # Try core.Profile first
         profile = obj.sender.profiles.first()
         if profile and profile.profile_picture:
-            request = self.context.get('request')
-            if request:
-                return request.build_absolute_uri(profile.profile_picture.url)
-            return profile.profile_picture.url
+            url = profile.profile_picture.url
+            return request.build_absolute_uri(url) if request else url
+        # Fall back to authentication.UserProfile
+        try:
+            auth_profile = obj.sender.profile
+            if auth_profile and auth_profile.profile_photo:
+                url = auth_profile.profile_photo.url
+                return request.build_absolute_uri(url) if request else url
+        except Exception:
+            pass
         return None
 
     def get_recipient_name(self, obj):
@@ -1043,12 +1051,20 @@ class EmailDetailSerializer(serializers.ModelSerializer):
         return profile.name if profile else obj.sender.username
 
     def get_sender_profile_picture(self, obj):
+        request = self.context.get('request')
+        # Try core.Profile first
         profile = obj.sender.profiles.first()
         if profile and profile.profile_picture:
-            request = self.context.get('request')
-            if request:
-                return request.build_absolute_uri(profile.profile_picture.url)
-            return profile.profile_picture.url
+            url = profile.profile_picture.url
+            return request.build_absolute_uri(url) if request else url
+        # Fall back to authentication.UserProfile
+        try:
+            auth_profile = obj.sender.profile
+            if auth_profile and auth_profile.profile_photo:
+                url = auth_profile.profile_photo.url
+                return request.build_absolute_uri(url) if request else url
+        except Exception:
+            pass
         return None
 
     def get_recipient_name(self, obj):
