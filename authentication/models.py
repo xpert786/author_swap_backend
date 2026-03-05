@@ -64,6 +64,9 @@ class UserProfile(models.Model):
     instagram_url = models.URLField(blank=True, null=True)
     tiktok_url = models.URLField(blank=True, null=True)
 
+    # Stripe customer ID fallback for users without a UserSubscription record
+    stripe_customer_id = models.CharField(max_length=100, blank=True, null=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

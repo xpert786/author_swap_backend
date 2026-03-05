@@ -3425,17 +3425,27 @@ class SetupIntentView(APIView):
             user = request.user
             user_sub = getattr(user, 'subscription', None)
 
-            # ── Ensure the user has a Stripe Customer ──
-            stripe_customer_id = user_sub.stripe_customer_id if user_sub else None
+            # ── Resolve existing Stripe Customer ID from any source ──
+            stripe_customer_id = None
+            if user_sub and user_sub.stripe_customer_id:
+                stripe_customer_id = user_sub.stripe_customer_id
+            else:
+                # Fallback: check authentication.UserProfile
+                try:
+                    auth_profile = user.profile
+                    stripe_customer_id = getattr(auth_profile, 'stripe_customer_id', None) or None
+                except Exception:
+                    pass
 
+            # ── Validate the stored customer ID is still valid in Stripe ──
             if stripe_customer_id:
-                # Validate the stored customer ID against the current Stripe account
                 try:
                     stripe.Customer.retrieve(stripe_customer_id)
                 except stripe.error.InvalidRequestError:
                     # Stale customer from a different Stripe account → create a new one
                     stripe_customer_id = None
 
+            # ── Create a new Stripe Customer if needed ──
             if not stripe_customer_id:
                 customer = stripe.Customer.create(
                     email=user.email,
@@ -3444,12 +3454,21 @@ class SetupIntentView(APIView):
                 )
                 stripe_customer_id = customer.id
 
-                # Persist the new customer ID
+                # Persist to subscription if it exists
                 if user_sub:
                     user_sub.stripe_customer_id = stripe_customer_id
                     user_sub.save(update_fields=['stripe_customer_id'])
+                else:
+                    # Persist to authentication.UserProfile as fallback
+                    try:
+                        auth_profile = user.profile
+                        if hasattr(auth_profile, 'stripe_customer_id'):
+                            auth_profile.stripe_customer_id = stripe_customer_id
+                            auth_profile.save(update_fields=['stripe_customer_id'])
+                    except Exception:
+                        pass
 
-            # ── Create a SetupIntent attached to the customer ──
+            # ── Always create a fresh SetupIntent ──
             setup_intent = stripe.SetupIntent.create(
                 customer=stripe_customer_id,
                 payment_method_types=['card'],
