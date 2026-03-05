@@ -996,6 +996,17 @@ class AcceptSwapView(APIView):
         swap.status = 'completed'
         swap.save()
 
+        # Update the slot's status if it has reached max capacity
+        slot = swap.slot
+        accepted_count = SwapRequest.objects.filter(
+            slot=slot, 
+            status__in=['completed', 'confirmed', 'verified']
+        ).count()
+        if accepted_count >= slot.max_partners:
+            slot.status = 'booked'
+            slot.save(update_fields=['status'])
+
+
         # MailerLite: move from Pending → Approved group
         requester_email = swap.requester.email
         try:
