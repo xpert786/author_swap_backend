@@ -3522,14 +3522,35 @@ class SavedPaymentMethodsView(APIView):
         stripe.api_key = settings.STRIPE_SECRET_KEY.strip()
 
         try:
-            stripe_customer_id = _get_stripe_customer_id(request.user)
+            user = request.user
+            stripe_customer_id = _get_stripe_customer_id(user)
+
+            # ── Fallback: search Stripe by email to find orphaned customer ──
+            if not stripe_customer_id:
+                customers = stripe.Customer.list(email=user.email, limit=5)
+                if customers.data:
+                    # Pick the most recently created one
+                    stripe_customer_id = customers.data[0].id
+                    # Persist so we don't have to search again
+                    user_sub = getattr(user, 'subscription', None)
+                    if user_sub:
+                        user_sub.stripe_customer_id = stripe_customer_id
+                        user_sub.save(update_fields=['stripe_customer_id'])
+                    else:
+                        try:
+                            user.profile.stripe_customer_id = stripe_customer_id
+                            user.profile.save(update_fields=['stripe_customer_id'])
+                        except Exception:
+                            pass
 
             if not stripe_customer_id:
                 return Response([])
 
-            # Validate the customer ID
+            # Validate the customer ID is still valid
             try:
                 customer = stripe.Customer.retrieve(stripe_customer_id)
+                if customer.get('deleted'):
+                    return Response([])
             except stripe.error.InvalidRequestError:
                 return Response([])
 
@@ -3562,6 +3583,7 @@ class SavedPaymentMethodsView(APIView):
             import logging
             logging.getLogger(__name__).error(f"SavedPaymentMethods Error: {str(e)}")
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 
 
 class DeletePaymentMethodView(APIView):

@@ -60,3 +60,8 @@ class ChatMessageAdmin(admin.ModelAdmin):
     list_filter = ['is_read', 'is_file']
     search_fields = ['content', 'sender__username', 'recipient__username']
     ordering = ['-created_at']
+
+
+    
+    
+    
