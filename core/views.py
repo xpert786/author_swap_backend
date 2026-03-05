@@ -1983,10 +1983,12 @@ class ComposeEmailView(APIView):
             try:
                 sender_profile = request.user.profiles.first()
                 sender_name = sender_profile.name if sender_profile else request.user.username
+                # Use only the first word/name for cleaner notifications
+                sender_first_name = sender_name.split()[0] if sender_name else request.user.username
                 Notification.objects.create(
                     recipient=recipient,
-                    title=f"New Email from {sender_name}",
-                    message=f"{sender_name} sent you a message: \"{data['subject']}\"",
+                    title=f"New Email from {sender_first_name}",
+                    message=f"{sender_first_name} sent you a message: \"{data['subject']}\"",
                     badge='NEW',
                     action_url=f'/communication-tools/email/{email_obj.id}/',
                 )

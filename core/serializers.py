@@ -989,6 +989,8 @@ class EmailListSerializer(serializers.ModelSerializer):
         return None
 
     def get_recipient_name(self, obj):
+        if not obj.recipient:
+            return None
         profile = obj.recipient.profiles.first()
         return profile.name if profile else obj.recipient.username
 
@@ -1050,10 +1052,14 @@ class EmailDetailSerializer(serializers.ModelSerializer):
         return None
 
     def get_recipient_name(self, obj):
+        if not obj.recipient:
+            return None
         profile = obj.recipient.profiles.first()
         return profile.name if profile else obj.recipient.username
 
     def get_recipient_email(self, obj):
+        if not obj.recipient:
+            return None
         return obj.recipient.email
 
     def get_formatted_date(self, obj):
@@ -1071,17 +1077,21 @@ class ComposeEmailSerializer(serializers.Serializer):
     """
     Serializer for composing/sending a new email.
     Accepts recipient by user ID or username.
+    When saving a draft, recipient, subject, and body are all optional.
     """
-    recipient_id = serializers.IntegerField(required=False)
-    recipient_username = serializers.CharField(required=False)
-    subject = serializers.CharField(max_length=255)
-    body = serializers.CharField()
+    recipient_id = serializers.IntegerField(required=False, allow_null=True)
+    recipient_username = serializers.CharField(required=False, allow_blank=True)
+    subject = serializers.CharField(max_length=255, required=False, allow_blank=True, default='')
+    body = serializers.CharField(required=False, allow_blank=True, default='')
     is_draft = serializers.BooleanField(default=False)
     parent_email_id = serializers.IntegerField(required=False, allow_null=True)
 
     def validate(self, data):
-        if not data.get('recipient_id') and not data.get('recipient_username'):
-            raise serializers.ValidationError("Either 'recipient_id' or 'recipient_username' is required.")
+        is_draft = data.get('is_draft', False)
+        # Recipient is only required when actually sending (not a draft)
+        if not is_draft:
+            if not data.get('recipient_id') and not data.get('recipient_username'):
+                raise serializers.ValidationError("Either 'recipient_id' or 'recipient_username' is required.")
         return data
 
 
