@@ -77,6 +77,8 @@ class NewsletterSlotSerializer(serializers.ModelSerializer):
     time_period = serializers.ReadOnlyField()
     formatted_time = serializers.SerializerMethodField(required=False)
     formatted_date = serializers.SerializerMethodField()
+    current_partners_count = serializers.SerializerMethodField()
+    
     class Meta:
         model = NewsletterSlot
         fields = '__all__'
@@ -95,6 +97,12 @@ class NewsletterSlotSerializer(serializers.ModelSerializer):
         if obj.send_date:
             return obj.send_date.strftime("%d-%m-%Y")
         return None
+        
+    def get_current_partners_count(self, obj):
+        return obj.swap_requests.filter(
+            status__in=['completed', 'confirmed', 'verified']
+        ).count()
+
     def validate(self, data):
         genre = data.get('preferred_genre')
         subs = data.get('subgenres', [])
