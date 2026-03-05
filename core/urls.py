@@ -92,4 +92,4 @@ urlpatterns = [
     path('stripe/payment-methods/<str:pm_id>/', DeletePaymentMethodView.as_view(), name='stripe-delete-payment-method'),
     path('stripe/payment-methods/<str:pm_id>/set-default/', SetDefaultPaymentMethodView.as_view(), name='stripe-set-default-pm'),
     path('stripe/webhook/', StripeWebhookView.as_view(), name='stripe-webhook'),
-]
+]   
