@@ -2719,15 +2719,12 @@ def _apply_unused_credit(user_sub, stripe_customer_id):
     if credit_cents <= 0:
         return 0
 
-    # Apply as a negative balance transaction (credit)
-    stripe.Customer.create_balance_transaction(
+    # the amount shown and charged — so the user sees only what they actually owe.
+    # Set the absolute balance (instead of adding a transaction) so it doesn't duplicate
+    # if the user abandons checkout and tries again.
+    stripe.Customer.modify(
         stripe_customer_id,
-        amount=-credit_cents,           # negative = credit toward next charge
-        currency='usd',
-        description=(
-            f'Proration credit: {remaining_days} unused days '
-            f'on {user_sub.tier.label} plan (${user_sub.tier.price}/mo)'
-        ),
+        balance=-credit_cents,           # negative = credit toward next charge
     )
     return credit_cents
 
@@ -2871,12 +2868,58 @@ class CreateStripeCheckoutSessionView(APIView):
                 except stripe.error.InvalidRequestError:
                     price_id = _ensure_valid_price(tier)
 
-            # ── Create a Checkout Session ──
+            # ── If user already has an active subscription, use ChangePlanView logic ──
+            existing_sub = getattr(request.user, 'subscription', None)
+            if existing_sub and existing_sub.stripe_subscription_id and existing_sub.is_active:
+                # Try to modify the existing subscription in-place.
+                # If the stored subscription ID is stale (wrong account/deleted),
+                # fall through silently to create a fresh Checkout Session.
+                try:
+                    stripe_sub = stripe.Subscription.retrieve(existing_sub.stripe_subscription_id)
+                    item_id = stripe_sub['items']['data'][0]['id']
+
+                    # 'always_invoice' immediately charges/credits the prorated difference
+                    # instead of deferring it to the next billing cycle.
+                    updated_sub = stripe.Subscription.modify(
+                        existing_sub.stripe_subscription_id,
+                        items=[{'id': item_id, 'price': price_id}],
+                        proration_behavior='always_invoice',
+                    )
+
+                    # Use Stripe's real billing cycle end (not a hardcoded +30 days)
+                    from datetime import date as _date
+                    period_end = _safe_period_end(updated_sub)
+                    existing_sub.tier = tier
+                    existing_sub.active_until = period_end
+                    existing_sub.renew_date = period_end
+                    existing_sub.is_active = True
+                    existing_sub.save(update_fields=['tier', 'active_until', 'renew_date', 'is_active'])
+
+                    return Response({
+                        "detail": f"Plan updated to {tier.label} successfully.",
+                        "tier": tier.name,
+                        "label": tier.label,
+                        "active_until": str(period_end),
+                    })
+
+                except stripe.error.InvalidRequestError:
+                    # Stale subscription ID (different Stripe account or deleted).
+                    # Clear it so a fresh checkout session creates a new subscription.
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        f"Stale stripe_subscription_id '{existing_sub.stripe_subscription_id}' "
+                        f"for user {request.user.id}. Clearing and falling back to new checkout."
+                    )
+                    existing_sub.stripe_subscription_id = None
+                    existing_sub.stripe_customer_id = None
+                    existing_sub.save(update_fields=['stripe_subscription_id', 'stripe_customer_id'])
+
+            # ── New subscription — create a Checkout Session ──
             # Always get or create a Stripe Customer so:
             #  (a) saved payment methods are remembered
             #  (b) any proration credit is tied to the customer
             from datetime import date as _d
-            existing_sub = getattr(request.user, 'subscription', None)
+            existing_sub = existing_sub  # already retrieved above
 
             cust_id = _get_or_create_stripe_customer(request.user, existing_sub)
 
