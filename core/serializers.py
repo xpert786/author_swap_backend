@@ -993,9 +993,12 @@ class EmailListSerializer(serializers.ModelSerializer):
         return profile.name if profile else obj.recipient.username
 
     def get_formatted_date(self, obj):
+        import pytz
         from django.utils import timezone
-        now = timezone.now().date()
-        target = (obj.sent_at or obj.created_at).date()
+        ist = pytz.timezone('Asia/Kolkata')
+        now = timezone.now().astimezone(ist).date()
+        raw_dt = obj.sent_at or obj.created_at
+        target = raw_dt.astimezone(ist).date()
         if target == now:
             return "Today"
         elif (now - target).days == 1:
@@ -1054,7 +1057,9 @@ class EmailDetailSerializer(serializers.ModelSerializer):
         return obj.recipient.email
 
     def get_formatted_date(self, obj):
-        dt = obj.sent_at or obj.created_at
+        import pytz
+        ist = pytz.timezone('Asia/Kolkata')
+        dt = (obj.sent_at or obj.created_at).astimezone(ist)
         return dt.strftime("%B %d, %Y at %I:%M %p")
 
     def get_replies(self, obj):
