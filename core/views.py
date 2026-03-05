@@ -3478,6 +3478,7 @@ class SetupIntentView(APIView):
             return Response({
                 'client_secret': setup_intent.client_secret,
                 'customer_id': stripe_customer_id,
+                'stripe_public_key': settings.STRIPE_PUBLIC_KEY,
             })
 
         except Exception as e:
