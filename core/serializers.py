@@ -134,7 +134,11 @@ class NewsletterSlotSerializer(serializers.ModelSerializer):
             if isinstance(val, str) and (not val.strip() or val.lower() == 'null' or val == '--:-- --'):
                 data['send_time'] = None
             
-        # 3. Flatten subgenres if they are sent as a list
+        # 3. Handle price (default to 0.00 if missing or empty)
+        if 'price' not in data or data.get('price') in [None, '', 'null']:
+            data['price'] = 0.00
+
+        # 4. Flatten subgenres if they are sent as a list
         if 'subgenres' in data and isinstance(data['subgenres'], list):
             data['subgenres'] = ",".join(data['subgenres'])
             
