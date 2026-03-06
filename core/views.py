@@ -2835,11 +2835,20 @@ class UpgradeSubscriptionView(APIView):
         stripe.api_key = settings.STRIPE_SECRET_KEY.strip()
 
         user_id = request.data.get('user_id')
-        new_price_id = request.data.get('new_price_id')
+        tier_id = request.data.get('tier_id')
 
-        if not new_price_id:
-            return Response({"error": "new_price_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+        if not tier_id:
+            return Response({"error": "tier_id is required."}, status=status.HTTP_400_BAD_REQUEST)
             
+        try:
+            tier = SubscriptionTier.objects.get(id=tier_id)
+        except SubscriptionTier.DoesNotExist:
+            return Response({"error": "Invalid subscription tier."}, status=status.HTTP_404_NOT_FOUND)
+            
+        new_price_id = tier.stripe_price_id
+        if not new_price_id:
+             return Response({"error": "The selected tier does not have a valid Stripe price."}, status=status.HTTP_400_BAD_REQUEST)
+
         if user_id and str(user_id) != str(request.user.id) and not request.user.is_staff:
             return Response({"error": "You do not have permission to upgrade this subscription."}, status=status.HTTP_403_FORBIDDEN)
 
@@ -2865,18 +2874,16 @@ class UpgradeSubscriptionView(APIView):
             )
 
             period_end = _safe_period_end(updated_sub)
-            tier = SubscriptionTier.objects.filter(stripe_price_id=new_price_id).first()
-            if tier:
-                user_sub.tier = tier
-                user_sub.active_until = period_end
-                user_sub.renew_date = period_end
-                user_sub.is_active = True
-                user_sub.save(update_fields=['tier', 'active_until', 'renew_date', 'is_active'])
+            user_sub.tier = tier
+            user_sub.active_until = period_end
+            user_sub.renew_date = period_end
+            user_sub.is_active = True
+            user_sub.save(update_fields=['tier', 'active_until', 'renew_date', 'is_active'])
 
             return Response({
                 "status": "success",
                 "message": "Subscription upgraded successfully",
-                "new_plan": tier.name.lower() if tier else "premium"
+                "new_plan": tier.name.lower()
             }, status=status.HTTP_200_OK)
 
         except stripe.error.CardError as e:
