@@ -87,7 +87,7 @@ class NewsletterSlotSerializer(serializers.ModelSerializer):
             'send_time': {'required': False, 'allow_null': True},
             'max_partners': {'required': True},
             'visibility': {'required': True},
-            'price': {'required': False, 'allow_null': True, 'allow_blank': True},
+            'price': {'required': False, 'allow_null': True},
         }
     def get_formatted_time(self, obj):
         if obj.send_time:

@@ -42,7 +42,7 @@ class NewsletterSlot(models.Model):
     promotion_type = models.CharField(max_length=20, choices=PROMOTION_CHOICES, default='genre_specific')
     
     # Added price for paid promotions based on UI mockups
-    price = models.DecimalField(max_digits=10, decimal_places=2, default=0.00, help_text="Set price if promotion_type is Paid")
+    price = models.DecimalField(max_digits=10, decimal_places=2, default=0.00, blank=True, null=True, help_text="Set price if promotion_type is Paid")
     
     partner_requirements = models.TextField(blank=True, null=True)
     
