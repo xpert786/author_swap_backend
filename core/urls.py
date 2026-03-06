@@ -15,7 +15,7 @@ from .views import (
     MySwapPartnersView, ComposePartnerListView, ChatMessageDetailView,
     CreateStripeCheckoutSessionView, StripeWebhookView, ChangePlanView,
     SetupIntentView, SavedPaymentMethodsView, DeletePaymentMethodView, SetDefaultPaymentMethodView,
-    PreviewPlanChangeView, SyncSubscriptionView,
+    PreviewPlanChangeView, SyncSubscriptionView, UpgradeSubscriptionView,
 )
 from .ui_views import SlotExploreView, SlotDetailsView, SwapArrangementView
 
@@ -83,6 +83,7 @@ urlpatterns = [
     path('chat/message/<int:message_id>/', ChatMessageDetailView.as_view(), name='chat-message-detail'),
 
     # Stripe
+    path('subscription/upgrade/', UpgradeSubscriptionView.as_view(), name='subscription-upgrade'),
     path('stripe/create-checkout-session/', CreateStripeCheckoutSessionView.as_view(), name='stripe-create-session'),
     path('stripe/change-plan/', ChangePlanView.as_view(), name='stripe-change-plan'),
     path('stripe/change-plan/preview/', PreviewPlanChangeView.as_view(), name='stripe-change-plan-preview'),

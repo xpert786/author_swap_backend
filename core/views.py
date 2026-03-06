@@ -2824,9 +2824,73 @@ def _sync_user_subscription_from_stripe(user):
         return None
 
 
-class CreateStripeCheckoutSessionView(APIView):
+class UpgradeSubscriptionView(APIView):
     """
-    POST /api/stripe/create-checkout-session/
+    POST /api/subscription/upgrade
+    Upgrades a user's subscription and automatically charges the saved card.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        stripe.api_key = settings.STRIPE_SECRET_KEY.strip()
+
+        user_id = request.data.get('user_id')
+        new_price_id = request.data.get('new_price_id')
+
+        if not new_price_id:
+            return Response({"error": "new_price_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+            
+        if user_id and str(user_id) != str(request.user.id) and not request.user.is_staff:
+            return Response({"error": "You do not have permission to upgrade this subscription."}, status=status.HTTP_403_FORBIDDEN)
+
+        user_sub = getattr(request.user, 'subscription', None)
+        
+        if not user_sub or not user_sub.stripe_subscription_id or not user_sub.stripe_customer_id:
+            return Response({"error": "No active subscription found. Please subscribe first."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            stripe_sub = stripe.Subscription.retrieve(user_sub.stripe_subscription_id)
+            if not stripe_sub.get('items') or not stripe_sub['items']['data']:
+                return Response({"error": "Invalid subscription state in Stripe."}, status=status.HTTP_400_BAD_REQUEST)
+                
+            subscription_item_id = stripe_sub['items']['data'][0]['id']
+
+            updated_sub = stripe.Subscription.modify(
+                user_sub.stripe_subscription_id,
+                items=[{
+                    "id": subscription_item_id,
+                    "price": new_price_id
+                }],
+                proration_behavior="always_invoice", # creates and immediately pays prorated invoice using default payment method
+            )
+
+            period_end = _safe_period_end(updated_sub)
+            tier = SubscriptionTier.objects.filter(stripe_price_id=new_price_id).first()
+            if tier:
+                user_sub.tier = tier
+                user_sub.active_until = period_end
+                user_sub.renew_date = period_end
+                user_sub.is_active = True
+                user_sub.save(update_fields=['tier', 'active_until', 'renew_date', 'is_active'])
+
+            return Response({
+                "status": "success",
+                "message": "Subscription upgraded successfully",
+                "new_plan": tier.name.lower() if tier else "premium"
+            }, status=status.HTTP_200_OK)
+
+        except stripe.error.CardError as e:
+            return Response({"error": f"Payment failed: {e.user_message}"}, status=status.HTTP_402_PAYMENT_REQUIRED)
+        except stripe.error.StripeError as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"UpgradeSubscription error: {str(e)}")
+            return Response({"error": "Internal server error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class CreateStripeCheckoutSessionView(APIView):
+    """    POST /api/stripe/create-checkout-session/
     Expects {'tier_id': 1}
     Generates a Stripe Checkout Session URL for the specified subscription tier.
     """
@@ -3397,6 +3461,39 @@ class StripeWebhookView(APIView):
             except Exception as e:
                 import logging
                 logging.getLogger(__name__).error(f"Webhook customer.subscription.deleted error: {e}")
+
+        # ── Invoice Payment Succeeded ──
+        elif event_type == 'invoice.payment_succeeded':
+            invoice = event['data']['object']
+            stripe_subscription_id = invoice.get('subscription')
+            if stripe_subscription_id:
+                try:
+                    user_sub = UserSubscription.objects.filter(
+                        stripe_subscription_id=stripe_subscription_id
+                    ).first()
+                    if user_sub:
+                        user_sub.is_active = True
+                        user_sub.save(update_fields=['is_active'])
+                except Exception as e:
+                    import logging
+                    logging.getLogger(__name__).error(f"Webhook invoice.payment_succeeded error: {e}")
+
+        # ── Invoice Payment Failed ──
+        elif event_type == 'invoice.payment_failed':
+            invoice = event['data']['object']
+            stripe_subscription_id = invoice.get('subscription')
+            if stripe_subscription_id:
+                try:
+                    user_sub = UserSubscription.objects.filter(
+                        stripe_subscription_id=stripe_subscription_id
+                    ).first()
+                    if user_sub:
+                        # Optionally mark as inactive if payment fails, or handle dunning
+                        user_sub.is_active = False
+                        user_sub.save(update_fields=['is_active'])
+                except Exception as e:
+                    import logging
+                    logging.getLogger(__name__).error(f"Webhook invoice.payment_failed error: {e}")
 
         return Response(status=status.HTTP_200_OK)
 
