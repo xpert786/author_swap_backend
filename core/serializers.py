@@ -347,6 +347,7 @@ class SwapManagementSerializer(serializers.ModelSerializer):
     status = serializers.SerializerMethodField()
     # Author info (the person who SENT the request)
     author_name = serializers.SerializerMethodField()
+    sender_name = serializers.SerializerMethodField()
     author_genre_label = serializers.SerializerMethodField()
     profile_picture = serializers.SerializerMethodField()
 
@@ -367,7 +368,7 @@ class SwapManagementSerializer(serializers.ModelSerializer):
         model = SwapRequest
         fields = [
             'id', 'status', 'message', 'created_at',
-            'author_name', 'author_genre_label', 'profile_picture',
+            'author_name', 'sender_name', 'author_genre_label', 'profile_picture',
             'audience_size', 'reliability_score',
             'requesting_book',
             'rejection_info', 'rejection_reason', 'rejected_at',
@@ -395,6 +396,10 @@ class SwapManagementSerializer(serializers.ModelSerializer):
         partner = self.get_partner_user(obj)
         profile = partner.profiles.first()
         return profile.name if profile else partner.username
+        
+    def get_sender_name(self, obj):
+        profile = obj.requester.profiles.first()
+        return profile.name if profile else obj.requester.username
 
     def get_author_genre_label(self, obj):
         partner = self.get_partner_user(obj)

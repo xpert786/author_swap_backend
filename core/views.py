@@ -1063,7 +1063,7 @@ class RejectSwapView(APIView):
             return Response({"detail": f"Cannot reject a swap in '{swap.status}' state."}, status=status.HTTP_400_BAD_REQUEST)
 
         swap.status = 'rejected'
-        swap.rejection_reason = request.data.get('reason', '')
+        swap.rejection_reason = request.data.get('rejection_reason', request.data.get('reason', ''))
         swap.rejected_at = tz.now()
         swap.save()
 
