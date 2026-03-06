@@ -649,39 +649,54 @@ class SwapRequestListView(APIView):
                 user_books = Book.objects.filter(user=request.user)
                 
                 # Use the exact same serializer as the AddBookView to reuse the structure
-                books_data = BookSerializer(user_books, many=True, context={'request': request}).data
-                
-                response_data['my_books'] = books_data
+                books_data = list(BookSerializer(user_books, many=True, context={'request': request}).data)
                 
                 # Check if the user has already requested this slot
                 from core.models import SwapRequest
                 sent_request = SwapRequest.objects.filter(slot=slot, requester=request.user).exists()
                 response_data['sent_request'] = sent_request
                 
-                # Compute Compatibility Indicators
+                # Compute global Compatibility Indicators
                 indicators = {
                     "genre_match": False,
                     "audience_comparable": False,
                     "reliability_match": False
                 }
                 
-                # Genre Match: True if the user has any active book in the slot's preferred genre
-                if any(b.primary_genre == slot.preferred_genre for b in user_books):
-                    indicators["genre_match"] = True
-                
                 owner_profile = slot.user.profiles.first()
                 requester_profile = request.user.profiles.first()
                 
                 if owner_profile and requester_profile:
-                    # Audience Comparable: Simplified logic (you can adjust this later to compare actual audience sizes)
+                    # Audience Comparable: Simplified logic
                     indicators["audience_comparable"] = True
                     
                     # Reliability Match: reputation score difference <= 1.0
                     owner_rep = owner_profile.reputation_score or 0.0
                     req_rep = requester_profile.reputation_score or 0.0
                     indicators["reliability_match"] = abs(owner_rep - req_rep) <= 1.0
+
+                # Genre Match: True if specific book matches, else verify if any book matches
+                book_id = request.query_params.get('book_id')
+                if book_id:
+                    selected_book = user_books.filter(id=book_id).first()
+                    if selected_book:
+                        indicators["genre_match"] = selected_book.primary_genre == slot.preferred_genre
+                elif any(b.primary_genre == slot.preferred_genre for b in user_books):
+                    indicators["genre_match"] = True
                 
                 response_data['compatibility'] = indicators
+
+                # Inject compatibility indicators into each book in my_books for instant frontend updates
+                for book_item in books_data:
+                    book_obj = user_books.filter(id=book_item['id']).first()
+                    if book_obj:
+                        book_item['compatibility'] = {
+                            "genre_match": book_obj.primary_genre == slot.preferred_genre,
+                            "audience_comparable": indicators["audience_comparable"],
+                            "reliability_match": indicators["reliability_match"]
+                        }
+                
+                response_data['my_books'] = books_data
                 
                 return Response(response_data)
             except NewsletterSlot.DoesNotExist:
