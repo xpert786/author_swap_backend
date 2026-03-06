@@ -598,6 +598,7 @@ class SwapHistoryDetailSerializer(serializers.ModelSerializer):
             'promoting_book',
             'link_ctr_analysis',
             'message',
+            'rejection_reason',
         ]
 
     def _get_partner(self, obj):
