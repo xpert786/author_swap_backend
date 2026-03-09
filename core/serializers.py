@@ -367,6 +367,7 @@ class SwapManagementSerializer(serializers.ModelSerializer):
     # Pay Eligibility
     eligible_for_pay = serializers.SerializerMethodField()
     price = serializers.SerializerMethodField()
+    payment_done = serializers.SerializerMethodField()
 
     class Meta:
         model = SwapRequest
@@ -378,7 +379,7 @@ class SwapManagementSerializer(serializers.ModelSerializer):
             'rejection_info', 'rejection_reason', 'rejected_at',
             'scheduled_label', 'scheduled_date',
             'preferred_placement', 'max_partners_acknowledged',
-            'eligible_for_pay', 'price',
+            'eligible_for_pay', 'price', 'payment_done',
         ]
 
     def get_status(self, obj):
@@ -411,6 +412,19 @@ class SwapManagementSerializer(serializers.ModelSerializer):
     def get_price(self, obj):
         return float(obj.slot.price) if obj.slot and obj.slot.price else 0.00
 
+    def get_payment_done(self, obj):
+        # A payment is considered 'done' if the swap is a paid one AND the overall status is completed/verified.
+        if not obj.slot:
+            return False
+            
+        prom_type = str(obj.slot.promotion_type).lower() if obj.slot.promotion_type else ''
+        price_val = obj.slot.price or 0
+        is_paid = prom_type == 'paid' or price_val > 0
+        
+        if is_paid and obj.status in ['completed', 'verified']:
+            return True
+        return False
+
     def to_representation(self, instance):
         representation = super().to_representation(instance)
         
@@ -424,6 +438,7 @@ class SwapManagementSerializer(serializers.ModelSerializer):
         if not is_paid:
             representation.pop('eligible_for_pay', None)
             representation.pop('price', None)
+            representation.pop('payment_done', None)
             
         return representation
 
