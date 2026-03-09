@@ -780,14 +780,11 @@ class TrackMySwapSerializer(serializers.ModelSerializer):
         return result
 
     def get_deadline(self, obj):
-        """Deadline = slot's send_date + send_time formatted as 'dd MMM, YYYY hh:mmAM/PM'"""
-        from datetime import datetime
-        slot = obj.slot
-        if slot and slot.send_date and slot.send_time:
-            dt = datetime.combine(slot.send_date, slot.send_time)
+        """Deadline = 7 days from request date"""
+        from datetime import timedelta
+        if obj.created_at:
+            dt = obj.created_at + timedelta(days=7)
             return dt.strftime("%d %b, %Y %I:%M%p")
-        elif slot and slot.send_date:
-            return slot.send_date.strftime("%d %b, %Y")
         return None
 
     def get_request_date(self, obj):

@@ -939,6 +939,21 @@ class SwapManagementListView(APIView):
         tab = request.query_params.get('tab', 'all').lower()
         search = request.query_params.get('search', '').strip()
 
+        # Auto-expire pending swaps older than 7 days
+        from datetime import timedelta
+        expired_cutoff = tz.now() - timedelta(days=7)
+        expired_swaps = SwapRequest.objects.filter(
+            Q(slot__user=user) | Q(requester=user),
+            status='pending',
+            created_at__lt=expired_cutoff
+        )
+        if expired_swaps.exists():
+            expired_swaps.update(
+                status='rejected',
+                rejection_reason='Auto-rejected: 7-day acceptance window expired.',
+                rejected_at=tz.now()
+            )
+
         # Base queryset: swaps where the current user is either the requester (sent) or owns the slot (received)
         qs = SwapRequest.objects.filter(
             Q(slot__user=user) | Q(requester=user)
@@ -1178,6 +1193,17 @@ class TrackMySwapView(APIView):
             )
         except SwapRequest.DoesNotExist:
             return Response({"detail": "Swap not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        # Auto-expire if pending for > 7 days
+        from datetime import timedelta
+        from django.utils import timezone as tz
+        if swap.status == 'pending':
+            cutoff = tz.now() - timedelta(days=7)
+            if swap.created_at < cutoff:
+                swap.status = 'rejected'
+                swap.rejection_reason = 'Auto-rejected: 7-day acceptance window expired.'
+                swap.rejected_at = tz.now()
+                swap.save()
 
         serializer = TrackMySwapSerializer(swap, context={'request': request})
         return Response(serializer.data)
