@@ -374,6 +374,7 @@ class SwapManagementSerializer(serializers.ModelSerializer):
             'rejection_info', 'rejection_reason', 'rejected_at',
             'scheduled_label', 'scheduled_date',
             'preferred_placement', 'max_partners_acknowledged',
+            'eligible_for_pay',
         ]
 
     def get_status(self, obj):
@@ -381,10 +382,18 @@ class SwapManagementSerializer(serializers.ModelSerializer):
         # Show as 'sending' if the swap is pending and the current user is the requester
         if request and obj.status == 'pending' and obj.requester_id == request.user.id:
             return 'sending'
-        # Map 'confirmed' and 'completed' status to 'scheduled' in the API output
-        if obj.status in ['confirmed', 'completed']:
+            
+        is_paid = obj.slot and obj.slot.promotion_type == 'paid'
+        
+        if obj.status in ['confirmed', 'completed', 'scheduled']:
+            if is_paid:
+                return 'completed'
             return 'scheduled'
+            
         return obj.status
+
+    def get_eligible_for_pay(self, obj):
+        return obj.slot.promotion_type == 'paid' if obj.slot else False
 
     def get_partner_user(self, obj):
         request = self.context.get('request')
