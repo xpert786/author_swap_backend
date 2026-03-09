@@ -21,7 +21,7 @@ class SlotExploreView(ListAPIView):
 
     def get_queryset(self):
         # Exclude the logged-in user's own slots from the explore feed
-        return NewsletterSlot.objects.exclude(user=self.request.user).order_by('created_at')
+        return NewsletterSlot.objects.exclude(user=self.request.user).order_by('-created_at')
 
 class SlotDetailsView(RetrieveUpdateAPIView):
     """
