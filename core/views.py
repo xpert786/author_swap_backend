@@ -900,7 +900,7 @@ class RecentSwapHistoryView(ListAPIView):
         author_id = self.kwargs.get('author_id')
         return SwapRequest.objects.filter(
             slot__user_id=author_id, 
-            status__in=['confirmed', 'verified']
+            status__in=['confirmed', 'verified', 'scheduled', 'completed']
         ).order_by('-created_at')
 
 
@@ -930,8 +930,8 @@ class SwapManagementListView(APIView):
         'pending': ['pending'],
         'sending': ['sending'],
         'rejected': ['rejected'],
-        'scheduled': ['scheduled'],
-        'completed': ['completed', 'verified', 'confirmed'],
+        'scheduled': ['scheduled', 'completed', 'confirmed'],
+        'completed': ['verified'],
     }
 
     def get(self, request):
@@ -954,9 +954,9 @@ class SwapManagementListView(APIView):
         elif tab == 'rejected':
             qs = qs.filter(status='rejected')
         elif tab == 'scheduled':
-            qs = qs.filter(status='scheduled')
+            qs = qs.filter(status__in=['scheduled', 'completed', 'confirmed'])
         elif tab == 'completed':
-            qs = qs.filter(status__in=['completed', 'verified', 'confirmed'])
+            qs = qs.filter(status='verified')
 
         # Search by author name, book title, or date
         if search:
@@ -979,8 +979,8 @@ class SwapManagementListView(APIView):
             'pending': all_qs.filter(slot__user=user, status='pending').count(),
             'sending': all_qs.filter(requester=user, status='pending').count(),
             'rejected': all_qs.filter(status='rejected').count(),
-            'scheduled': all_qs.filter(status='scheduled').count(),
-            'completed': all_qs.filter(status__in=['completed', 'verified', 'confirmed']).count(),
+            'scheduled': all_qs.filter(status__in=['scheduled', 'completed', 'confirmed']).count(),
+            'completed': all_qs.filter(status='verified').count(),
         }
 
         return Response({
@@ -1007,15 +1007,15 @@ class AcceptSwapView(APIView):
         if swap.status not in ['pending']:
             return Response({"detail": f"Cannot accept a swap in '{swap.status}' state."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Update status directly to completed when accepted
-        swap.status = 'completed'
+        # Update status directly to scheduled when accepted
+        swap.status = 'scheduled'
         swap.save()
 
         # Update the slot's status if it has reached max capacity
         slot = swap.slot
         accepted_count = SwapRequest.objects.filter(
             slot=slot, 
-            status__in=['completed', 'confirmed', 'verified']
+            status__in=['completed', 'confirmed', 'verified', 'scheduled']
         ).count()
         if accepted_count >= slot.max_partners:
             slot.status = 'booked'
@@ -1393,8 +1393,8 @@ class SubscriberAnalyticsView(APIView):
             links = []
             has_swaps = False
             
-            # Fetch partner link clicks for this slot's completed swaps
-            for swap in slot.swap_requests.filter(status__in=['completed', 'verified', 'confirmed', 'sending']):
+            # Fetch partner link clicks for this slot's completed/scheduled/verified swaps
+            for swap in slot.swap_requests.filter(status__in=['completed', 'verified', 'confirmed', 'sending', 'scheduled']):
                 has_swaps = True
                 for lc in swap.link_clicks.all():
                     links.append({
@@ -1533,7 +1533,7 @@ class AuthorDashboardView(APIView):
 
         completed_swaps = SwapRequest.objects.filter(
             Q(slot__user=user) | Q(requester=user),
-            status__in=['completed', 'verified']
+            status__in=['completed', 'verified', 'confirmed', 'scheduled']
         ).count()
 
         profile = user.profiles.first()
@@ -1562,7 +1562,7 @@ class AuthorDashboardView(APIView):
         slots_in_month = slots_qs.values('send_date').annotate(
             total_slots=Count('id'),
             pending_swaps=Count('swap_requests', filter=Q(swap_requests__status='pending')),
-            confirmed_swaps=Count('swap_requests', filter=Q(swap_requests__status__in=['confirmed', 'verified'])),
+            confirmed_swaps=Count('swap_requests', filter=Q(swap_requests__status__in=['confirmed', 'verified', 'completed', 'scheduled'])),
             scheduled_swaps=Count('swap_requests', filter=Q(swap_requests__status='scheduled')),
         )
 

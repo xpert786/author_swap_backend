@@ -101,7 +101,7 @@ class NewsletterSlotSerializer(serializers.ModelSerializer):
         
     def get_current_partners_count(self, obj):
         return obj.swap_requests.filter(
-            status__in=['completed', 'confirmed', 'verified']
+            status__in=['completed', 'confirmed', 'verified', 'scheduled']
         ).count()
 
     def validate(self, data):
@@ -381,9 +381,9 @@ class SwapManagementSerializer(serializers.ModelSerializer):
         # Show as 'sending' if the swap is pending and the current user is the requester
         if request and obj.status == 'pending' and obj.requester_id == request.user.id:
             return 'sending'
-        # Map legacy 'confirmed' status to 'completed' in the API output
-        if obj.status == 'confirmed':
-            return 'completed'
+        # Map 'confirmed' and 'completed' status to 'scheduled' in the API output
+        if obj.status in ['confirmed', 'completed']:
+            return 'scheduled'
         return obj.status
 
     def get_partner_user(self, obj):
@@ -533,7 +533,7 @@ class SwapPartnerSerializer(serializers.ModelSerializer):
         # Fetch last 9 confirmed swaps for this user
         confirmed_requests = SwapRequest.objects.filter(
             slot__user=obj.user, 
-            status__in=['confirmed', 'verified']
+            status__in=['confirmed', 'verified', 'scheduled', 'completed']
         ).order_by('-created_at')[:9]
         return RecentSwapSerializer(confirmed_requests, many=True).data
 
@@ -646,10 +646,10 @@ class SwapHistoryDetailSerializer(serializers.ModelSerializer):
     def get_status_label(self, obj):
         labels = {
             'pending': 'Swap Pending',
-            'confirmed': 'Swap Confirmed',
+            'confirmed': 'Swap Scheduled',
             'sending': 'Swap Sending',
             'scheduled': 'Swap Scheduled',
-            'completed': 'Swap Completed',
+            'completed': 'Swap Scheduled',
             'verified': 'Swap Verified',
             'rejected': 'Swap Rejected',
         }
@@ -675,7 +675,7 @@ class SwapHistoryDetailSerializer(serializers.ModelSerializer):
             "id": book.id,
             "title": book.title,
             "cover": None,
-            "status": "Upcoming" if obj.status in ['pending', 'confirmed', 'sending', 'scheduled'] else "Completed",
+            "status": "Upcoming" if obj.status in ['pending', 'confirmed', 'sending', 'scheduled', 'completed'] else "Completed",
         }
         if book.book_cover:
             request = self.context.get('request')
@@ -807,10 +807,10 @@ class TrackMySwapSerializer(serializers.ModelSerializer):
     def get_status_label(self, obj):
         labels = {
             'pending': 'Waiting for partner response',
-            'confirmed': 'Swap Confirmed',
+            'confirmed': 'Swap Scheduled',
             'sending': 'Sending in progress',
             'scheduled': 'Swap Scheduled',
-            'completed': 'Swap Completed',
+            'completed': 'Swap Scheduled',
             'verified': 'Swap Verified',
             'rejected': 'Swap Rejected',
         }
@@ -1203,6 +1203,8 @@ class ConversationPartnerSerializer(serializers.ModelSerializer):
             (Q(requester=obj) & Q(slot__user=request.user))
         ).exclude(status='rejected').order_by('-created_at').first()
         
+        if swap.status in ['confirmed', 'completed']:
+            return 'scheduled'
         return swap.status if swap else None
 
     def get_avatar(self, obj):

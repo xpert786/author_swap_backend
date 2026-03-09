@@ -117,8 +117,8 @@ class Profile(models.Model):
     def swaps_completed(self):
         from .models import SwapRequest
         # Count confirmed/verified requests where this profile's user is either the requester or the slot owner
-        sent_confirmed = self.user.sent_swap_requests.filter(status__in=['confirmed', 'verified']).count()
-        received_confirmed = SwapRequest.objects.filter(slot__user=self.user, status__in=['confirmed', 'verified']).count()
+        sent_confirmed = self.user.sent_swap_requests.filter(status__in=['confirmed', 'verified', 'scheduled', 'completed']).count()
+        received_confirmed = SwapRequest.objects.filter(slot__user=self.user, status__in=['confirmed', 'verified', 'scheduled', 'completed']).count()
         return sent_confirmed + received_confirmed
 
     # Auto-Approve logic and friends

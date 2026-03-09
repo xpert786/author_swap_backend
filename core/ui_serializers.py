@@ -30,12 +30,13 @@ class SlotExploreSerializer(serializers.ModelSerializer):
         ]
 
     def get_current_partners_count(self, obj):
-        return obj.swap_requests.filter(status__in=['confirmed', 'verified']).count()
+        return obj.swap_requests.filter(status__in=['confirmed', 'verified', 'scheduled', 'completed']).count()
 
 class SlotPartnerSerializer(serializers.ModelSerializer):
     """Used to serialize SwapRequest instances as partners inside a Slot"""
     author = AuthorProfileSerializer(source='requester.profiles.first', read_only=True)
     rating = serializers.FloatField(source='requester.profiles.first.reputation_score', read_only=True)
+    status = serializers.SerializerMethodField()
     
     # "You" is the owner of the slot. You are sending the partner's book in your slot.
     you_send_date = serializers.DateField(source='slot.send_date', read_only=True)
@@ -53,6 +54,11 @@ class SlotPartnerSerializer(serializers.ModelSerializer):
     
     # Partner's audience size from offered slot
     partner_audience_size = serializers.SerializerMethodField()
+
+    def get_status(self, obj):
+        if obj.status in ['confirmed', 'completed']:
+            return 'scheduled'
+        return obj.status
 
     class Meta:
         model = SwapRequest
@@ -133,10 +139,10 @@ class SlotDetailsSerializer(serializers.ModelSerializer):
         ]
 
     def get_current_partners_count(self, obj):
-        return obj.swap_requests.filter(status__in=['confirmed', 'verified', 'completed', 'sending']).count()
+        return obj.swap_requests.filter(status__in=['confirmed', 'verified', 'completed', 'sending', 'scheduled']).count()
 
     def get_swap_partners(self, obj):
-        requests = obj.swap_requests.filter(status__in=['confirmed', 'verified', 'completed', 'sending'])
+        requests = obj.swap_requests.filter(status__in=['confirmed', 'verified', 'completed', 'sending', 'scheduled'])
         return SlotPartnerSerializer(requests, many=True, context=self.context).data
 
 class SwapArrangementSerializer(serializers.ModelSerializer):
@@ -150,6 +156,12 @@ class SwapArrangementSerializer(serializers.ModelSerializer):
     partner_sends_date = serializers.DateField(source='slot.send_date', read_only=True)
     partner_sends_time = serializers.TimeField(source='slot.send_time', read_only=True)
     partner_sends_book = serializers.CharField(source='book.title', read_only=True)
+    status = serializers.SerializerMethodField()
+
+    def get_status(self, obj):
+        if obj.status in ['confirmed', 'completed']:
+            return 'scheduled'
+        return obj.status
 
     class Meta:
         model = SwapRequest
