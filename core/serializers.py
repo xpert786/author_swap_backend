@@ -387,7 +387,12 @@ class SwapManagementSerializer(serializers.ModelSerializer):
         if request and obj.status == 'pending' and obj.requester_id == request.user.id:
             return 'sending'
             
-        is_paid = obj.slot and obj.slot.promotion_type == 'paid'
+        is_paid = False
+        if obj.slot:
+            prom_type = str(obj.slot.promotion_type).lower() if obj.slot.promotion_type else ''
+            price_val = obj.slot.price or 0
+            if prom_type == 'paid' or price_val > 0:
+                is_paid = True
         
         if obj.status in ['confirmed', 'completed', 'scheduled']:
             if is_paid:
@@ -397,14 +402,24 @@ class SwapManagementSerializer(serializers.ModelSerializer):
         return obj.status
 
     def get_eligible_for_pay(self, obj):
-        return obj.slot.promotion_type == 'paid' if obj.slot else False
+        if not obj.slot:
+            return False
+        prom_type = str(obj.slot.promotion_type).lower() if obj.slot.promotion_type else ''
+        price_val = obj.slot.price or 0
+        return prom_type == 'paid' or price_val > 0
 
     def get_price(self, obj):
         return float(obj.slot.price) if obj.slot and obj.slot.price else 0.00
 
     def to_representation(self, instance):
         representation = super().to_representation(instance)
-        is_paid = instance.slot and instance.slot.promotion_type == 'paid'
+        
+        is_paid = False
+        if instance.slot:
+            prom_type = str(instance.slot.promotion_type).lower() if instance.slot.promotion_type else ''
+            price_val = instance.slot.price or 0
+            if prom_type == 'paid' or price_val > 0:
+                is_paid = True
         
         if not is_paid:
             representation.pop('eligible_for_pay', None)
