@@ -366,6 +366,7 @@ class SwapManagementSerializer(serializers.ModelSerializer):
     
     # Pay Eligibility
     eligible_for_pay = serializers.SerializerMethodField()
+    price = serializers.SerializerMethodField()
 
     class Meta:
         model = SwapRequest
@@ -377,7 +378,7 @@ class SwapManagementSerializer(serializers.ModelSerializer):
             'rejection_info', 'rejection_reason', 'rejected_at',
             'scheduled_label', 'scheduled_date',
             'preferred_placement', 'max_partners_acknowledged',
-            'eligible_for_pay',
+            'eligible_for_pay', 'price',
         ]
 
     def get_status(self, obj):
@@ -397,6 +398,19 @@ class SwapManagementSerializer(serializers.ModelSerializer):
 
     def get_eligible_for_pay(self, obj):
         return obj.slot.promotion_type == 'paid' if obj.slot else False
+
+    def get_price(self, obj):
+        return float(obj.slot.price) if obj.slot and obj.slot.price else 0.00
+
+    def to_representation(self, instance):
+        representation = super().to_representation(instance)
+        is_paid = instance.slot and instance.slot.promotion_type == 'paid'
+        
+        if not is_paid:
+            representation.pop('eligible_for_pay', None)
+            representation.pop('price', None)
+            
+        return representation
 
     def get_partner_user(self, obj):
         request = self.context.get('request')
