@@ -363,6 +363,9 @@ class SwapManagementSerializer(serializers.ModelSerializer):
 
     # Scheduled
     scheduled_label = serializers.SerializerMethodField()
+    
+    # Pay Eligibility
+    eligible_for_pay = serializers.SerializerMethodField()
 
     class Meta:
         model = SwapRequest
