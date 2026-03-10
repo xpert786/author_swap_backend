@@ -413,7 +413,8 @@ class SwapManagementSerializer(serializers.ModelSerializer):
         return float(obj.slot.price) if obj.slot and obj.slot.price else 0.00
 
     def get_payment_done(self, obj):
-        # A payment is considered 'done' if the swap is a paid one AND the overall status is completed/verified.
+        # A payment is considered 'done' if there's a completed SwapPayment record
+        # OR if the swap status indicates payment was completed
         if not obj.slot:
             return False
             
@@ -421,7 +422,17 @@ class SwapManagementSerializer(serializers.ModelSerializer):
         price_val = obj.slot.price or 0
         is_paid = prom_type == 'paid' or price_val > 0
         
-        if is_paid and obj.status in ['completed', 'verified']:
+        if not is_paid:
+            return False
+        
+        # First check for actual SwapPayment record (most reliable)
+        payment = getattr(obj, 'payment', None)
+        if payment and payment.status == 'completed':
+            return True
+        
+        # Fallback: check if swap status indicates completion
+        # Note: 'confirmed', 'scheduled' also display as 'completed' for paid slots
+        if obj.status in ['confirmed', 'completed', 'scheduled', 'verified']:
             return True
         return False
 
