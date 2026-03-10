@@ -659,6 +659,9 @@ class SwapHistoryDetailSerializer(serializers.ModelSerializer):
 
     # Link-Level CTR analysis
     link_ctr_analysis = serializers.SerializerMethodField()
+    
+    # Payment status
+    payment_done = serializers.SerializerMethodField()
 
     class Meta:
         model = SwapRequest
@@ -669,6 +672,7 @@ class SwapHistoryDetailSerializer(serializers.ModelSerializer):
             'partner_links',
             'promoting_book',
             'link_ctr_analysis',
+            'payment_done',
             'message',
             'rejection_reason',
         ]
@@ -716,6 +720,17 @@ class SwapHistoryDetailSerializer(serializers.ModelSerializer):
         return None
 
     def get_status_label(self, obj):
+        # Check if this is a paid swap and payment is completed
+        if obj.slot:
+            prom_type = str(obj.slot.promotion_type).lower() if obj.slot.promotion_type else ''
+            price_val = obj.slot.price or 0
+            is_paid = prom_type == 'paid' or price_val > 0
+            
+            if is_paid:
+                payment = getattr(obj, 'payment', None)
+                if payment and payment.status == 'completed':
+                    return 'Swap Completed'
+        
         labels = {
             'pending': 'Swap Pending',
             'confirmed': 'Swap Scheduled',
@@ -726,6 +741,24 @@ class SwapHistoryDetailSerializer(serializers.ModelSerializer):
             'rejected': 'Swap Rejected',
         }
         return labels.get(obj.status, obj.get_status_display())
+    
+    def get_payment_done(self, obj):
+        # Check if payment is completed for paid swaps
+        if not obj.slot:
+            return False
+            
+        prom_type = str(obj.slot.promotion_type).lower() if obj.slot.promotion_type else ''
+        price_val = obj.slot.price or 0
+        is_paid = prom_type == 'paid' or price_val > 0
+        
+        if not is_paid:
+            return False
+        
+        payment = getattr(obj, 'payment', None)
+        if payment and payment.status == 'completed':
+            return True
+        
+        return False
 
     def get_partner_links(self, obj):
         partner = self._get_partner(obj)
