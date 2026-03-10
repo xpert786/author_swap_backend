@@ -1331,29 +1331,14 @@ class SubscriberVerificationView(APIView):
 
 
     def post(self, request):
-        tier_id = request.data.get('tier_id')
-        if not tier_id:
-            return Response({"error": "tier_id is required"}, status=status.HTTP_400_BAD_REQUEST)
-            
-        try:
-            tier = SubscriptionTier.objects.get(id=tier_id)
-        except SubscriptionTier.DoesNotExist:
-            return Response({"error": "Invalid tier_id"}, status=status.HTTP_404_NOT_FOUND)
-            
-        subscription, created = UserSubscription.objects.update_or_create(
-            user=request.user,
-            defaults={
-                'tier': tier,
-                'active_until': date.today() + timedelta(days=30),
-                'renew_date': date.today() + timedelta(days=30),
-                'is_active': True
-            }
+        """
+        Legacy mock endpoint.
+        Returns an error indicating that plan selection must go through Stripe.
+        """
+        return Response(
+            {"error": "This endpoint is deprecated. Use /api/stripe/create-checkout-session/ to select or upgrade a plan."},
+            status=status.HTTP_400_BAD_REQUEST
         )
-        
-        return Response({
-            "message": "Plan selected successfully",
-            "subscription": UserSubscriptionSerializer(subscription).data
-        })
 
 
 class ConnectMailerLiteView(APIView):
