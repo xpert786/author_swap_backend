@@ -67,6 +67,10 @@ class UserProfile(models.Model):
     # Stripe customer ID fallback for users without a UserSubscription record
     stripe_customer_id = models.CharField(max_length=100, blank=True, null=True)
 
+    # Onboarding completion flag — set to True only when user finishes all 4 steps.
+    # Steps: AccountBasics → OnlinePresence → ConnectMailerLite → ProfileReview
+    onboarding_completed = models.BooleanField(default=False)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

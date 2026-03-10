@@ -19,18 +19,61 @@ except ImportError:
 User = get_user_model()
 
 
-def is_profile_complete(user):
+def get_onboarding_status(user):
     """
-    Helper to check if a user has completed their profile onboarding.
-    Defined as having pen_name and primary_genre set.
+    Returns a dict with per-step completion status for the 4-step onboarding flow:
+      Step 1 - AccountBasics : pen_name + primary_genre
+      Step 2 - OnlinePresence: at least one social/website URL
+      Step 3 - ConnectMailerLite: is_connected_mailerlite == True
+      Step 4 - ProfileReview : onboarding_completed == True (set on PUT of review step)
     """
     try:
         profile = getattr(user, 'profile', None)
-        if not profile:
-            return False
-        return bool(profile.pen_name and profile.primary_genre)
+
+        step1 = bool(profile and profile.pen_name and profile.primary_genre)
+
+        step2 = bool(
+            profile and (
+                profile.website_url or
+                profile.facebook_url or
+                profile.instagram_url or
+                profile.tiktok_url
+            )
+        )
+
+        try:
+            from core.models import SubscriberVerification
+            verification = SubscriberVerification.objects.filter(user=user).first()
+            step3 = bool(verification and verification.is_connected_mailerlite)
+        except Exception:
+            step3 = False
+
+        step4 = bool(profile and profile.onboarding_completed)
+
+        return {
+            'step1_account_basics': step1,
+            'step2_online_presence': step2,
+            'step3_connect_mailerlite': step3,
+            'step4_profile_review': step4,
+            'all_complete': step1 and step2 and step3 and step4,
+        }
     except Exception:
-        return False
+        return {
+            'step1_account_basics': False,
+            'step2_online_presence': False,
+            'step3_connect_mailerlite': False,
+            'step4_profile_review': False,
+            'all_complete': False,
+        }
+
+
+def is_profile_complete(user):
+    """
+    Returns True only when ALL 4 onboarding steps are done.
+    Used by the login/signup response so the frontend knows whether
+    to redirect the user to the dashboard or back to onboarding.
+    """
+    return get_onboarding_status(user)['all_complete']
 
 
 class LoginAPIView(APIView):
@@ -40,12 +83,14 @@ class LoginAPIView(APIView):
             user = serializer.validated_data['user']
             refresh = RefreshToken.for_user(user)
             access_token = refresh.access_token
-            
+            onboarding = get_onboarding_status(user)
+
             return Response({
                 'refresh': str(refresh),
                 'access': str(access_token),
                 'token': str(access_token),  # For backward compatibility
-                'isprofilecompleted': is_profile_complete(user),
+                'isprofilecompleted': onboarding['all_complete'],
+                'onboarding_steps': onboarding,
                 'user': {
                     'id': user.id,
                     'email': user.email,
@@ -62,12 +107,14 @@ class SignupAPIView(APIView):
             user = serializer.save()
             refresh = RefreshToken.for_user(user)
             access_token = refresh.access_token
-            
+            onboarding = get_onboarding_status(user)
+
             return Response({
                 'refresh': str(refresh),
                 'access': str(access_token),
                 'token': str(access_token),  # For backward compatibility
-                'isprofilecompleted': is_profile_complete(user),
+                'isprofilecompleted': onboarding['all_complete'],
+                'onboarding_steps': onboarding,
                 'user': {
                     'id': user.id,
                     'email': user.email,
@@ -186,9 +233,11 @@ class UserProfileReviewAPIView(APIView):
     def get(self, request):
         profile, created = UserProfile.objects.get_or_create(user=request.user)
         serializer = UserProfileReviewSerializer(profile)
+        onboarding = get_onboarding_status(request.user)
         return Response({
             'message': 'User profile retrieved successfully.',
-            'data': serializer.data
+            'data': serializer.data,
+            'onboarding_steps': onboarding,
         }, status=status.HTTP_200_OK)
 
     def put(self, request):
@@ -196,9 +245,20 @@ class UserProfileReviewAPIView(APIView):
         serializer = UserProfileReviewSerializer(profile, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
+
+            # ── Step 4 complete: mark onboarding as finished ──
+            # This is the final review step. Once saved, the user is allowed
+            # to access the dashboard.
+            profile.refresh_from_db()
+            profile.onboarding_completed = True
+            profile.save(update_fields=['onboarding_completed'])
+
+            onboarding = get_onboarding_status(request.user)
             return Response({
                 'message': 'User profile updated successfully.',
-                'data': serializer.data
+                'data': serializer.data,
+                'onboarding_steps': onboarding,
+                'isprofilecompleted': onboarding['all_complete'],
             }, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -415,13 +475,15 @@ class GoogleOAuthView(APIView):
         # Generate JWT tokens
         refresh = RefreshToken.for_user(user)
         access_token = refresh.access_token
+        onboarding = get_onboarding_status(user)
 
         return Response({
             'refresh': str(refresh),
             'access': str(access_token),
             'token': str(access_token),
             'is_new_user': is_new_user,
-            'isprofilecompleted': is_profile_complete(user),
+            'isprofilecompleted': onboarding['all_complete'],
+            'onboarding_steps': onboarding,
             'user': {
                 'id': user.id,
                 'email': user.email,
