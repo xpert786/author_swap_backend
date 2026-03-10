@@ -3178,25 +3178,69 @@ class CreateSwapCheckoutSessionView(APIView):
             user_sub = getattr(request.user, 'subscription', None)
             cust_id = _get_or_create_stripe_customer(request.user, user_sub)
 
-            # Create Stripe Product and Price for this swap payment
-            product = stripe.Product.create(
-                name=f"Swap Request - {slot.preferred_genre} slot on {slot.send_date}",
-                description=f"Newsletter swap promotion slot from {slot.user.username}",
-            )
-            
-            price = stripe.Price.create(
-                product=product.id,
-                unit_amount=int(slot_price * 100),  # Convert to cents
-                currency="usd",
-            )
+            # ── Check if user already has a saved card ──
+            # Retrieve the Stripe Customer to look for a default payment method.
+            stripe_customer = stripe.Customer.retrieve(cust_id)
+            default_pm_id = stripe_customer.get('invoice_settings', {}).get('default_payment_method')
 
-            # Create metadata to identify this as a swap payment
+            # Also check payment_methods list in case default isn't set via invoice_settings
+            if not default_pm_id:
+                payment_methods = stripe.PaymentMethod.list(customer=cust_id, type='card')
+                if payment_methods.data:
+                    default_pm_id = payment_methods.data[0].id
+
             metadata = {
                 'swap_request_id': str(swap_request.id),
                 'user_id': str(request.user.id),
                 'slot_id': str(slot.id),
                 'payment_type': 'swap',
             }
+
+            if default_pm_id:
+                # ── User has a saved card → charge it directly ──
+                payment_intent = stripe.PaymentIntent.create(
+                    amount=int(slot_price * 100),  # Convert to cents
+                    currency='usd',
+                    customer=cust_id,
+                    payment_method=default_pm_id,
+                    confirm=True,
+                    off_session=True,  # Charge without user interaction
+                    metadata=metadata,
+                    description=f"Swap Request {swap_request.id} - {slot.preferred_genre} slot on {slot.send_date}",
+                )
+
+                # Mark payment as completed
+                SwapPayment.objects.update_or_create(
+                    swap_request=swap_request,
+                    defaults={
+                        'payer': request.user,
+                        'amount': slot_price,
+                        'currency': 'USD',
+                        'stripe_payment_intent_id': payment_intent.id,
+                        'status': 'completed',
+                        'paid_at': timezone.now(),
+                    }
+                )
+
+                return Response({
+                    'charged': True,
+                    'payment_done': True,
+                    'detail': 'Payment charged successfully using your saved card.',
+                    'payment_intent_id': payment_intent.id,
+                })
+
+            # ── No saved card → redirect user to Stripe Checkout to add one ──
+            # Create Stripe Product and Price for this swap payment
+            product = stripe.Product.create(
+                name=f"Swap Request - {slot.preferred_genre} slot on {slot.send_date}",
+                description=f"Newsletter swap promotion slot from {slot.user.username}",
+            )
+
+            price = stripe.Price.create(
+                product=product.id,
+                unit_amount=int(slot_price * 100),  # Convert to cents
+                currency="usd",
+            )
 
             # Create Checkout Session for one-time payment
             checkout_kwargs = dict(
@@ -3208,6 +3252,9 @@ class CreateSwapCheckoutSessionView(APIView):
                 success_url=f"http://72.61.251.114/authorswap-frontend/swap-management",
                 cancel_url=f"http://72.61.251.114/authorswap-frontend/swap-management",
                 metadata=metadata,
+                payment_intent_data={
+                    'setup_future_usage': 'off_session',  # Save card for future charges
+                },
             )
 
             checkout_session = stripe.checkout.Session.create(**checkout_kwargs)
@@ -3225,10 +3272,27 @@ class CreateSwapCheckoutSessionView(APIView):
             )
 
             return Response({
+                'charged': False,
+                'payment_done': False,
                 'url': checkout_session.url,
                 'session_id': checkout_session.id,
+                'detail': 'No saved card found. Please complete payment via the checkout link.',
             })
 
+        except stripe.error.CardError as e:
+            # Saved card was declined — tell the frontend to redirect user to add a new card
+            import logging
+            logging.getLogger(__name__).warning(f"Swap payment card declined for user {request.user.id}: {str(e)}")
+            return Response(
+                {
+                    'error': e.user_message or 'Your saved card was declined.',
+                    'charged': False,
+                    'payment_done': False,
+                    'requires_action': True,
+                    'detail': 'Your saved card was declined. Please update your payment method.',
+                },
+                status=status.HTTP_402_PAYMENT_REQUIRED,
+            )
         except Exception as e:
             import logging
             logging.getLogger(__name__).error(f"Swap Checkout Error: {str(e)}")
