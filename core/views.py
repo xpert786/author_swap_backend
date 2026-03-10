@@ -1381,7 +1381,7 @@ class ConnectMailerLiteView(APIView):
             }
             # Test API by fetching account info
             logger.info(f"Testing MailerLite API with key: {api_key[:8]}...")
-            response = requests.get('https://api.mailerlite.com/api/v1/account', headers=headers, timeout=10)
+            response = requests.get('https://connect.mailerlite.com/api/account', headers=headers, timeout=10)
             logger.info(f"MailerLite API response status: {response.status_code}")
             logger.info(f"MailerLite API response body: {response.text[:200]}...")
             
