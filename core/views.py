@@ -3205,8 +3205,8 @@ class CreateSwapCheckoutSessionView(APIView):
                 mode='payment',  # One-time payment, not subscription
                 client_reference_id=str(request.user.id),
                 customer=cust_id,
-                success_url=f"http://72.61.251.114/authorswap-frontend/swap-payment-success?swap_request_id={swap_request.id}",
-                cancel_url=f"http://72.61.251.114/authorswap-frontend/swap-payment-cancel?swap_request_id={swap_request.id}",
+                success_url=f"http://72.61.251.114/authorswap-frontend/swap-management{swap_request.id}",
+                cancel_url=f"http://72.61.251.114/authorswap-frontend/sswap-management{swap_request.id}",
                 metadata=metadata,
             )
 
