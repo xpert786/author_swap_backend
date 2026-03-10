@@ -2789,40 +2789,55 @@ def _apply_unused_credit(user_sub, stripe_customer_id):
     """
     Calculate the prorated credit owed to the user from unused days on their
     current plan and post it as a Customer Balance Transaction in Stripe.
-
-    Stripe Checkout automatically deducts a negative customer balance from the
-    amount shown and charged — so the user sees only what they actually owe.
-
-    Returns: credit_cents (int)  — 0 if no credit applies.
     """
     from datetime import date as _d
     import math
 
+    def _clear_balance():
+        try:
+            stripe.Customer.modify(stripe_customer_id, balance=0)
+        except Exception:
+            pass
+
     if not user_sub or not user_sub.active_until or not user_sub.tier:
+        _clear_balance()
+        return 0
+
+    # IMPORTANT GUARD: Only give credit if they actually have a paid Stripe subscription!
+    if not user_sub.stripe_subscription_id:
+        _clear_balance()
         return 0
 
     today = _d.today()
     active_until = user_sub.active_until
 
     if active_until <= today:
+        _clear_balance()
         return 0           # subscription already expired — no credit
 
     remaining_days = (active_until - today).days
+    
     # Use 30-day billing period as the base (standard monthly billing)
     tier_price_cents = int(float(user_sub.tier.price) * 100)
     daily_rate_cents = tier_price_cents / 30.0
     credit_cents = math.floor(remaining_days * daily_rate_cents)
 
     if credit_cents <= 0:
+        _clear_balance()
         return 0
 
     # the amount shown and charged — so the user sees only what they actually owe.
     # Set the absolute balance (instead of adding a transaction) so it doesn't duplicate
     # if the user abandons checkout and tries again.
-    stripe.Customer.modify(
-        stripe_customer_id,
-        balance=-credit_cents,           # negative = credit toward next charge
-    )
+    try:
+        stripe.Customer.modify(
+            stripe_customer_id,
+            balance=-credit_cents,           # negative = credit toward next charge
+        )
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"Could not apply credit balance in Stripe: {str(e)}")
+        
     return credit_cents
 
 
