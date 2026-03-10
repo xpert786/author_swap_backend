@@ -715,6 +715,18 @@ class SwapHistoryDetailSerializer(serializers.ModelSerializer):
         return None
 
     def get_completed_date(self, obj):
+        # For paid swaps, show payment completion date if swap is paid and completed
+        if obj.slot:
+            prom_type = str(obj.slot.promotion_type).lower() if obj.slot.promotion_type else ''
+            price_val = obj.slot.price or 0
+            is_paid = prom_type == 'paid' or price_val > 0
+            
+            if is_paid:
+                payment = getattr(obj, 'payment', None)
+                if payment and payment.status == 'completed' and payment.paid_at:
+                    return payment.paid_at.strftime("%d %b, %Y")
+        
+        # For non-paid swaps or if payment not completed, show actual completion date
         if obj.completed_at:
             return obj.completed_at.strftime("%d %b, %Y")
         return None
