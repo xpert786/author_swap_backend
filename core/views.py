@@ -3699,21 +3699,42 @@ class StripeWebhookView(APIView):
                             swap_payment.paid_at = timezone.now()
                             swap_payment.save(update_fields=['status', 'stripe_payment_intent_id', 'paid_at'])
                             logger.info(f"SwapPayment {swap_payment.id} updated successfully")
+                        else:
+                            # Create SwapPayment if it doesn't exist (for legacy swaps or race conditions)
+                            logger.info(f"No SwapPayment found, creating new record for swap_request_id: {swap_request_id}")
+                            try:
+                                swap_request = SwapRequest.objects.get(id=swap_request_id_int)
+                                slot = swap_request.slot
+                                payer = swap_request.requester
+                                
+                                swap_payment = SwapPayment.objects.create(
+                                    swap_request=swap_request,
+                                    payer=payer,
+                                    amount=slot.price or 0,
+                                    currency='USD',
+                                    stripe_checkout_session_id=session.get('id'),
+                                    stripe_payment_intent_id=payment_intent,
+                                    status='completed',
+                                    paid_at=timezone.now()
+                                )
+                                logger.info(f"Created new SwapPayment {swap_payment.id} with status completed")
+                            except Exception as e:
+                                logger.error(f"Failed to create SwapPayment: {e}")
+                                swap_payment = None
                             
                             # Create notification for slot owner that payment is complete
                             try:
-                                swap_request = swap_payment.swap_request
-                                Notification.objects.create(
-                                    recipient=swap_request.slot.user,
-                                    title="Swap Payment Received",
-                                    badge="SWAP",
-                                    message=f"Payment received for swap request from {swap_payment.payer.username}.",
-                                    action_url=f"/dashboard/swaps/manage/"
-                                )
+                                if swap_payment:
+                                    swap_request = swap_payment.swap_request
+                                    Notification.objects.create(
+                                        recipient=swap_request.slot.user,
+                                        title="Swap Payment Received",
+                                        badge="SWAP",
+                                        message=f"Payment received for swap request from {swap_payment.payer.username}.",
+                                        action_url=f"/dashboard/swaps/manage/"
+                                    )
                             except Exception as e:
                                 logger.error(f"Failed to create notification: {e}")
-                        else:
-                            logger.error(f"No SwapPayment found for swap_request_id: {swap_request_id}")
                     except Exception as e:
                         logger.error(f"Webhook swap payment error: {e}")
                         import traceback
