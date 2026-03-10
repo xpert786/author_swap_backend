@@ -306,7 +306,7 @@ class Email(models.Model):
     ]
 
     sender = models.ForeignKey(User, on_delete=models.CASCADE, related_name='sent_emails')
-    recipient = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='received_emails')
+    recipient = models.ForeignKey(User, on_delete=models.CASCADE, related_name='received_emails')
     subject = models.CharField(max_length=255, blank=True, default='')
     body = models.TextField(blank=True, default='')
     folder = models.CharField(max_length=20, choices=FOLDER_CHOICES, default='inbox')
@@ -324,7 +324,7 @@ class Email(models.Model):
         ordering = ['-created_at']
 
     def __str__(self):
-        recipient_str = self.recipient.username if self.recipient else 'No recipient'
+        recipient_str = self.recipient.username
         return f"{self.subject or '(No subject)'} — {self.sender.username} → {recipient_str}"
 
 
