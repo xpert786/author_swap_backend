@@ -542,6 +542,14 @@ class SwapRequestListView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, slot_id=None):
+        # Check if user has at least one book to promote
+        user_books_count = Book.objects.filter(user=request.user).count()
+        if user_books_count == 0:
+            return Response(
+                {"detail": "You must have at least one book to send a swap request. Please add a book first."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
         data = request.data.copy()
         
         # Handle slot_id from URL keyword argument
@@ -736,6 +744,14 @@ class RequestSwapPlacementView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, slot_id):
+        # Check if user has at least one book to promote
+        user_books_count = Book.objects.filter(user=request.user).count()
+        if user_books_count == 0:
+            return Response(
+                {"detail": "You must have at least one book to send a swap request. Please add a book first."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
         try:
             slot = NewsletterSlot.objects.get(id=slot_id)
         except NewsletterSlot.DoesNotExist:
@@ -3071,6 +3087,122 @@ class CreateStripeCheckoutSessionView(APIView):
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+class CreateSwapCheckoutSessionView(APIView):
+    """
+    POST /api/stripe/create-swap-checkout-session/
+    Expects {'swap_request_id': 1}
+    Generates a Stripe Checkout Session URL for paying for a swap request.
+    
+    This is used when a user requests a swap in a paid slot (promotion_type='paid').
+    The user must complete payment before the swap request is fully submitted.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        if not settings.STRIPE_SECRET_KEY:
+            return Response(
+                {"detail": "Stripe API configuration is missing. Please add STRIPE_SECRET_KEY to your backend .env file."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        
+        stripe.api_key = settings.STRIPE_SECRET_KEY.strip()
+
+        swap_request_id = request.data.get('swap_request_id')
+        if not swap_request_id:
+            return Response({"detail": "swap_request_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            swap_request = SwapRequest.objects.get(id=swap_request_id, requester=request.user)
+        except SwapRequest.DoesNotExist:
+            return Response({"detail": "Swap request not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        # Get the slot and check if it's a paid slot
+        slot = swap_request.slot
+        if slot.promotion_type != 'paid':
+            return Response(
+                {"detail": "This slot does not require payment."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Check if price is set
+        slot_price = slot.price or 0
+        if slot_price <= 0:
+            return Response(
+                {"detail": "This slot has no price set."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Check if payment already exists
+        existing_payment = getattr(swap_request, 'payment', None)
+        if existing_payment and existing_payment.status == 'completed':
+            return Response(
+                {"detail": "Payment has already been completed for this swap request."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            # Get or create Stripe customer
+            user_sub = getattr(request.user, 'subscription', None)
+            cust_id = _get_or_create_stripe_customer(request.user, user_sub)
+
+            # Create Stripe Product and Price for this swap payment
+            product = stripe.Product.create(
+                name=f"Swap Request - {slot.preferred_genre} slot on {slot.send_date}",
+                description=f"Newsletter swap promotion slot from {slot.user.username}",
+            )
+            
+            price = stripe.Price.create(
+                product=product.id,
+                unit_amount=int(slot_price * 100),  # Convert to cents
+                currency="usd",
+            )
+
+            # Create metadata to identify this as a swap payment
+            metadata = {
+                'swap_request_id': str(swap_request.id),
+                'user_id': str(request.user.id),
+                'slot_id': str(slot.id),
+                'payment_type': 'swap',
+            }
+
+            # Create Checkout Session for one-time payment
+            checkout_kwargs = dict(
+                payment_method_types=['card'],
+                line_items=[{'price': price.id, 'quantity': 1}],
+                mode='payment',  # One-time payment, not subscription
+                client_reference_id=str(request.user.id),
+                customer=cust_id,
+                success_url=f"http://72.61.251.114/authorswap-frontend/swap-payment-success?swap_request_id={swap_request.id}",
+                cancel_url=f"http://72.61.251.114/authorswap-frontend/swap-payment-cancel?swap_request_id={swap_request.id}",
+                metadata=metadata,
+            )
+
+            checkout_session = stripe.checkout.Session.create(**checkout_kwargs)
+
+            # Create or update SwapPayment record
+            SwapPayment.objects.update_or_create(
+                swap_request=swap_request,
+                defaults={
+                    'payer': request.user,
+                    'amount': slot_price,
+                    'currency': 'USD',
+                    'stripe_checkout_session_id': checkout_session.id,
+                    'status': 'pending',
+                }
+            )
+
+            return Response({
+                'url': checkout_session.url,
+                'session_id': checkout_session.id,
+            })
+
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"Swap Checkout Error: {str(e)}")
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 class ChangePlanView(APIView):
     """
     POST /api/stripe/change-plan/
@@ -3423,6 +3555,46 @@ class StripeWebhookView(APIView):
         if event_type == 'checkout.session.completed':
             session = event['data']['object']
 
+            # Check if this is a swap payment (metadata will have payment_type='swap')
+            metadata = session.get('metadata', {})
+            if metadata.get('payment_type') == 'swap':
+                # Handle swap payment completion
+                swap_request_id = metadata.get('swap_request_id')
+                payment_intent = session.get('payment_intent')
+                
+                if swap_request_id:
+                    try:
+                        from core.models import SwapPayment
+                        swap_payment = SwapPayment.objects.filter(
+                            swap_request_id=swap_request_id
+                        ).first()
+                        
+                        if swap_payment:
+                            from django.utils import timezone
+                            swap_payment.status = 'completed'
+                            swap_payment.stripe_payment_intent_id = payment_intent
+                            swap_payment.paid_at = timezone.now()
+                            swap_payment.save(update_fields=['status', 'stripe_payment_intent_id', 'paid_at'])
+                            
+                            # Create notification for slot owner that payment is complete
+                            try:
+                                swap_request = swap_payment.swap_request
+                                Notification.objects.create(
+                                    recipient=swap_request.slot.user,
+                                    title="Swap Payment Received",
+                                    badge="SWAP",
+                                    message=f"Payment received for swap request from {swap_payment.payer.username}.",
+                                    action_url=f"/dashboard/swaps/manage/"
+                                )
+                            except Exception:
+                                pass
+                    except Exception as e:
+                        import logging
+                        logging.getLogger(__name__).error(f"Webhook swap payment error: {e}")
+                
+                return Response(status=status.HTTP_200_OK)
+
+            # ── Handle subscription checkout (original logic) ──
             # Retrieve the user ID from the client_reference_id
             user_id = session.get('client_reference_id')
             stripe_customer_id = session.get('customer')
