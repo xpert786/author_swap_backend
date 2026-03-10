@@ -395,9 +395,18 @@ class SwapManagementSerializer(serializers.ModelSerializer):
             if prom_type == 'paid' or price_val > 0:
                 is_paid = True
         
+        # For paid swaps, check if payment is completed
+        if is_paid:
+            payment = getattr(obj, 'payment', None)
+            if obj.status in ['confirmed', 'completed', 'scheduled']:
+                # Only show as 'completed' if payment is done
+                if payment and payment.status == 'completed':
+                    return 'completed'
+                # Otherwise show as 'scheduled' (payment pending)
+                return 'scheduled'
+        
+        # For non-paid swaps, keep original logic
         if obj.status in ['confirmed', 'completed', 'scheduled']:
-            if is_paid:
-                return 'completed'
             return 'scheduled'
             
         return obj.status

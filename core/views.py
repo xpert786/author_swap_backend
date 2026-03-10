@@ -1368,6 +1368,27 @@ class ConnectMailerLiteView(APIView):
         if not api_key:
             return Response({"error": "API Key is required"}, status=status.HTTP_400_BAD_REQUEST)
         
+        # Validate API key with MailerLite before saving
+        try:
+            import requests
+            headers = {
+                'Authorization': f'Bearer {api_key}',
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+            }
+            # Test API by fetching account info
+            response = requests.get('https://api.mailerlite.com/api/v1/account', headers=headers, timeout=10)
+            if response.status_code != 200:
+                return Response({
+                    "error": "Invalid MailerLite API Key",
+                    "details": "Please check your API key and try again"
+                }, status=status.HTTP_400_BAD_REQUEST)
+        except requests.exceptions.RequestException:
+            return Response({
+                "error": "Failed to validate API Key",
+                "details": "Unable to connect to MailerLite. Please try again."
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
         from core.services.mailerlite_service import sync_profile_audience
         from django.utils import timezone
         
