@@ -3119,14 +3119,17 @@ class CreateSwapCheckoutSessionView(APIView):
 
         # Get the slot and check if it's a paid slot
         slot = swap_request.slot
-        if slot.promotion_type != 'paid':
+        prom_type = str(slot.promotion_type).lower() if slot.promotion_type else ''
+        slot_price = slot.price or 0
+        
+        # A slot requires payment if promotion_type is 'paid' OR price > 0
+        if prom_type != 'paid' and slot_price <= 0:
             return Response(
                 {"detail": "This slot does not require payment."},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
         # Check if price is set
-        slot_price = slot.price or 0
         if slot_price <= 0:
             return Response(
                 {"detail": "This slot has no price set."},
