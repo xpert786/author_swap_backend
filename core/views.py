@@ -1371,22 +1371,30 @@ class ConnectMailerLiteView(APIView):
         # Validate API key with MailerLite before saving
         try:
             import requests
+            import logging
+            logger = logging.getLogger(__name__)
+            
             headers = {
                 'Authorization': f'Bearer {api_key}',
                 'Content-Type': 'application/json',
                 'Accept': 'application/json'
             }
             # Test API by fetching account info
+            logger.info(f"Testing MailerLite API with key: {api_key[:8]}...")
             response = requests.get('https://api.mailerlite.com/api/v1/account', headers=headers, timeout=10)
+            logger.info(f"MailerLite API response status: {response.status_code}")
+            logger.info(f"MailerLite API response body: {response.text[:200]}...")
+            
             if response.status_code != 200:
                 return Response({
                     "error": "Invalid MailerLite API Key",
-                    "details": "Please check your API key and try again"
+                    "details": f"API returned status {response.status_code}: {response.text[:100]}"
                 }, status=status.HTTP_400_BAD_REQUEST)
-        except requests.exceptions.RequestException:
+        except requests.exceptions.RequestException as e:
+            logger.error(f"MailerLite API request failed: {str(e)}")
             return Response({
                 "error": "Failed to validate API Key",
-                "details": "Unable to connect to MailerLite. Please try again."
+                "details": f"Connection error: {str(e)}"
             }, status=status.HTTP_400_BAD_REQUEST)
         
         from core.services.mailerlite_service import sync_profile_audience
