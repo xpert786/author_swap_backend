@@ -306,7 +306,7 @@ class Email(models.Model):
     ]
 
     sender = models.ForeignKey(User, on_delete=models.CASCADE, related_name='sent_emails')
-    recipient = models.ForeignKey(User, on_delete=models.CASCADE, related_name='received_emails')
+    recipient = models.ForeignKey(User, on_delete=models.CASCADE, null=True, blank=True, related_name='received_emails')
     subject = models.CharField(max_length=255, blank=True, default='')
     body = models.TextField(blank=True, default='')
     folder = models.CharField(max_length=20, choices=FOLDER_CHOICES, default='inbox')
