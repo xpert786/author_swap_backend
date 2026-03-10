@@ -20,7 +20,7 @@ from authentication.constants import GENRE_SUBGENRE_MAPPING
 from .models import (
     Book, NewsletterSlot, Profile, SwapRequest, Notification, 
     SubscriptionTier, UserSubscription, SubscriberVerification,
-    SubscriberGrowth, CampaignAnalytic, Email, ChatMessage
+    SubscriberGrowth, CampaignAnalytic, Email, ChatMessage, SwapPayment
 )
 import calendar
 from datetime import datetime, date, timedelta
