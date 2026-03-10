@@ -3206,6 +3206,113 @@ class CreateSwapCheckoutSessionView(APIView):
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+class SyncSwapPaymentView(APIView):
+    """
+    POST /api/stripe/sync-swap-payment/
+
+    Queries Stripe directly for a swap payment's checkout session status
+    and updates the local SwapPayment record.
+
+    Call this endpoint right after the user returns from Stripe's checkout
+    success URL so the DB is updated even if the webhook hasn't fired yet.
+
+    Body: { "session_id": "cs_test_xxx", "swap_request_id": 1 }
+
+    Response (success):
+        {
+            "detail": "Payment synced.",
+            "status": "completed",
+            "payment_done": true
+        }
+
+    Response (pending):
+        { "detail": "Payment not completed yet.", "status": "pending", "payment_done": false }
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        stripe.api_key = settings.STRIPE_SECRET_KEY.strip()
+
+        swap_request_id = request.data.get('swap_request_id')
+        session_id = request.data.get('session_id')
+
+        if not swap_request_id:
+            return Response(
+                {'detail': 'swap_request_id is required.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            swap_request = SwapRequest.objects.get(id=swap_request_id, requester=request.user)
+        except SwapRequest.DoesNotExist:
+            return Response(
+                {'detail': 'Swap request not found.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # Get or create the payment record
+        payment = getattr(swap_request, 'payment', None)
+
+        try:
+            # If we have a session_id, verify with Stripe
+            if session_id:
+                try:
+                    session = stripe.checkout.Session.retrieve(session_id)
+                    payment_status = session.get('payment_status')
+                    
+                    if payment_status == 'paid':
+                        payment_intent = session.get('payment_intent')
+                        
+                        if not payment:
+                            # Create payment record if it doesn't exist
+                            slot = swap_request.slot
+                            payment = SwapPayment.objects.create(
+                                swap_request=swap_request,
+                                payer=request.user,
+                                amount=slot.price or 0,
+                                currency='USD',
+                                stripe_checkout_session_id=session_id,
+                                stripe_payment_intent_id=payment_intent,
+                                status='completed',
+                                paid_at=timezone.now()
+                            )
+                        else:
+                            # Update existing payment
+                            if payment.status != 'completed':
+                                payment.status = 'completed'
+                                payment.stripe_payment_intent_id = payment_intent
+                                payment.paid_at = timezone.now()
+                                payment.save(update_fields=['status', 'stripe_payment_intent_id', 'paid_at'])
+                        
+                        return Response({
+                            'detail': 'Payment synced.',
+                            'status': 'completed',
+                            'payment_done': True
+                        })
+                    
+                except stripe.error.InvalidRequestError:
+                    pass  # Invalid session ID
+
+            # Check local payment status
+            if payment and payment.status == 'completed':
+                return Response({
+                    'detail': 'Payment completed.',
+                    'status': 'completed',
+                    'payment_done': True
+                })
+
+            return Response({
+                'detail': 'Payment not completed yet.',
+                'status': payment.status if payment else 'pending',
+                'payment_done': False
+            })
+
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"SyncSwapPayment Error: {str(e)}")
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 class ChangePlanView(APIView):
     """
     POST /api/stripe/change-plan/
@@ -3560,24 +3667,38 @@ class StripeWebhookView(APIView):
 
             # Check if this is a swap payment (metadata will have payment_type='swap')
             metadata = session.get('metadata', {})
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info(f"Webhook checkout.session.completed - metadata: {metadata}")
+            
             if metadata.get('payment_type') == 'swap':
                 # Handle swap payment completion
                 swap_request_id = metadata.get('swap_request_id')
                 payment_intent = session.get('payment_intent')
                 
+                logger.info(f"Processing swap payment for swap_request_id: {swap_request_id}")
+                
                 if swap_request_id:
                     try:
                         from core.models import SwapPayment
+                        # Convert string ID to int if needed
+                        try:
+                            swap_request_id_int = int(swap_request_id)
+                        except (ValueError, TypeError):
+                            swap_request_id_int = swap_request_id
+                            
                         swap_payment = SwapPayment.objects.filter(
-                            swap_request_id=swap_request_id
+                            swap_request_id=swap_request_id_int
                         ).first()
                         
                         if swap_payment:
+                            logger.info(f"Found SwapPayment record, updating to completed")
                             from django.utils import timezone
                             swap_payment.status = 'completed'
                             swap_payment.stripe_payment_intent_id = payment_intent
                             swap_payment.paid_at = timezone.now()
                             swap_payment.save(update_fields=['status', 'stripe_payment_intent_id', 'paid_at'])
+                            logger.info(f"SwapPayment {swap_payment.id} updated successfully")
                             
                             # Create notification for slot owner that payment is complete
                             try:
@@ -3589,11 +3710,16 @@ class StripeWebhookView(APIView):
                                     message=f"Payment received for swap request from {swap_payment.payer.username}.",
                                     action_url=f"/dashboard/swaps/manage/"
                                 )
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                logger.error(f"Failed to create notification: {e}")
+                        else:
+                            logger.error(f"No SwapPayment found for swap_request_id: {swap_request_id}")
                     except Exception as e:
-                        import logging
-                        logging.getLogger(__name__).error(f"Webhook swap payment error: {e}")
+                        logger.error(f"Webhook swap payment error: {e}")
+                        import traceback
+                        logger.error(traceback.format_exc())
+                else:
+                    logger.error("swap_request_id not found in metadata")
                 
                 return Response(status=status.HTTP_200_OK)
 
