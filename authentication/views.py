@@ -198,15 +198,20 @@ class AccountBasicsAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        profile, created = UserProfile.objects.get_or_create(user=request.user)
-        serializer = AccountBasicsSerializer(profile, data=request.data)
-        if serializer.is_valid():
-            serializer.save()
+        try:
+            profile, created = UserProfile.objects.get_or_create(user=request.user)
+            serializer = AccountBasicsSerializer(profile, data=request.data)
+            if serializer.is_valid():
+                serializer.save()
+                return Response({
+                    'message': 'Account basics saved successfully.',
+                    'data': serializer.data
+                }, status=status.HTTP_200_OK)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
             return Response({
-                'message': 'Account basics saved successfully.',
-                'data': serializer.data
-            }, status=status.HTTP_200_OK)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+                'error': f'Failed to save account basics: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class OnlinePresenceAPIView(APIView):
