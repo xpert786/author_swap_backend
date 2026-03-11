@@ -21,11 +21,10 @@ User = get_user_model()
 
 def get_onboarding_status(user):
     """
-    Returns a dict with per-step completion status for the 4-step onboarding flow:
+    Returns a dict with per-step completion status for 3-step onboarding flow:
       Step 1 - AccountBasics : pen_name + primary_genre
       Step 2 - OnlinePresence: at least one social/website URL
       Step 3 - ConnectMailerLite: is_connected_mailerlite == True
-      Step 4 - ProfileReview : onboarding_completed == True (set on PUT of review step)
     """
     try:
         profile = getattr(user, 'profile', None)
@@ -48,28 +47,26 @@ def get_onboarding_status(user):
         except Exception:
             step3 = False
 
-        step4 = bool(profile and profile.onboarding_completed)
-
         return {
             'step1_account_basics': step1,
             'step2_online_presence': step2,
             'step3_connect_mailerlite': step3,
-            'step4_profile_review': step4,
-            'all_complete': step1 and step2 and step3 and step4,
+            'step4_profile_review': True,  # Always true now
+            'all_complete': step1 and step2 and step3,  # Removed step4 requirement
         }
     except Exception:
         return {
             'step1_account_basics': False,
             'step2_online_presence': False,
             'step3_connect_mailerlite': False,
-            'step4_profile_review': False,
+            'step4_profile_review': True,
             'all_complete': False,
         }
 
 
 def is_profile_complete(user):
     """
-    Returns True only when ALL 4 onboarding steps are done.
+    Returns True only when ALL 3 onboarding steps are done.
     Used by the login/signup response so the frontend knows whether
     to redirect the user to the dashboard or back to onboarding.
     """
