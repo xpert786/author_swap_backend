@@ -3140,6 +3140,60 @@ class CreateStripeCheckoutSessionView(APIView):
             if existing_sub and existing_sub.is_active:
                 _apply_unused_credit(existing_sub, cust_id)
 
+            # ── Check for saved card and charge directly if available ──
+            stripe_customer = stripe.Customer.retrieve(cust_id)
+            default_pm_id = stripe_customer.get('invoice_settings', {}).get('default_payment_method')
+
+            if not default_pm_id:
+                # Fallback: check all card payment methods
+                pms = stripe.PaymentMethod.list(customer=cust_id, type='card', limit=1)
+                if pms.data:
+                    default_pm_id = pms.data[0].id
+
+            if default_pm_id:
+                try:
+                    # Attempt to create the subscription directly
+                    subscription = stripe.Subscription.create(
+                        customer=cust_id,
+                        items=[{'price': price_id}],
+                        default_payment_method=default_pm_id,
+                        off_session=True,
+                        # 'error_if_incomplete' ensures we don't create half-baked subscriptions
+                        # if payment fails or authentication (SCA) is required.
+                        payment_behavior='error_if_incomplete', 
+                    )
+
+                    period_end = _safe_period_end(subscription)
+                    
+                    # Update or create local subscription
+                    sub_obj, created = UserSubscription.objects.update_or_create(
+                        user=request.user,
+                        defaults={
+                            'tier': tier,
+                            'active_until': period_end,
+                            'renew_date': period_end,
+                            'is_active': True,
+                            'stripe_customer_id': cust_id,
+                            'stripe_subscription_id': subscription.id,
+                        }
+                    )
+
+                    return Response({
+                        "detail": f"Subscribed to {tier.label} successfully using your saved card.",
+                        "tier": tier.name,
+                        "label": tier.label,
+                        "active_until": str(period_end),
+                        "charged_directly": True,
+                    })
+                except stripe.error.CardError:
+                    # Payment failed or authentication required - fall through to Checkout Session
+                    pass
+                except Exception as e:
+                    import logging
+                    logging.getLogger(__name__).warning(f"Direct subscription creation failed for user {request.user.id}: {str(e)}")
+                    # Fall through to Checkout Session
+                    pass
+
             checkout_kwargs = dict(
                 payment_method_types=['card'],
                 line_items=[{'price': price_id, 'quantity': 1}],
@@ -3570,9 +3624,51 @@ class ChangePlanView(APIView):
             is_upgrade = new_price > old_price
 
             if is_upgrade:
-                # ── Use Stripe Checkout for Upgrades (Provides Auto-Redirect) ──
-                # This opens a formal payment page that redirects back automatically
-                # after the user completes payment or card verification.
+                # ── Try to charge saved card directly for upgrade ──
+                cust_id = user_sub.stripe_customer_id
+                if cust_id:
+                    try:
+                        stripe_customer = stripe.Customer.retrieve(cust_id)
+                        default_pm_id = stripe_customer.get('invoice_settings', {}).get('default_payment_method')
+                        
+                        if not default_pm_id:
+                            pms = stripe.PaymentMethod.list(customer=cust_id, type='card', limit=1)
+                            if pms.data:
+                                default_pm_id = pms.data[0].id
+
+                        if default_pm_id:
+                            item_id = stripe_sub['items']['data'][0]['id']
+                            updated_sub = stripe.Subscription.modify(
+                                user_sub.stripe_subscription_id,
+                                items=[{'id': item_id, 'price': price_id}],
+                                proration_behavior='always_invoice',
+                                default_payment_method=default_pm_id,
+                                payment_behavior='error_if_incomplete',
+                            )
+
+                            period_end = _safe_period_end(updated_sub)
+                            user_sub.tier = tier
+                            user_sub.active_until = period_end
+                            user_sub.renew_date = period_end
+                            user_sub.is_active = True
+                            user_sub.save(update_fields=['tier', 'active_until', 'renew_date', 'is_active'])
+
+                            return Response({
+                                "detail": f"Plan upgraded to {tier.label} successfully using your saved card.",
+                                "tier": tier.name,
+                                "label": tier.label,
+                                "price": str(tier.price),
+                                "active_until": str(period_end),
+                                "url": None,
+                                "is_upgrade": True,
+                                "charged_directly": True
+                            })
+                    except Exception as e:
+                        import logging
+                        logging.getLogger(__name__).warning(f"Direct upgrade failed for user {request.user.id}: {str(e)}")
+                        # Fall through to checkout session
+                
+                # ── Use Stripe Checkout for Upgrades (Fallback) ──
                 return _create_checkout_session(price_id)
 
             # ── Use Background Update for Downgrades/Same-Price changes ──
