@@ -17,6 +17,9 @@ from .views import (
     SetupIntentView, SavedPaymentMethodsView, DeletePaymentMethodView, SetDefaultPaymentMethodView,
     PreviewPlanChangeView, SyncSubscriptionView, UpgradeSubscriptionView,
 )
+from .calendar_views import (
+    GoogleCalendarExportView, OutlookCalendarExportView, ICSExportView, CalendarExportOptionsView
+)
 from .ui_views import SlotExploreView, SlotDetailsView, SwapArrangementView
 
 
@@ -95,4 +98,10 @@ urlpatterns = [
     path('stripe/payment-methods/<str:pm_id>/', DeletePaymentMethodView.as_view(), name='stripe-delete-payment-method'),
     path('stripe/payment-methods/<str:pm_id>/set-default/', SetDefaultPaymentMethodView.as_view(), name='stripe-set-default-pm'),
     path('stripe/webhook/', StripeWebhookView.as_view(), name='stripe-webhook'),
+
+    # Calendar Export
+    path('calendar/google/', GoogleCalendarExportView.as_view(), name='calendar-google'),
+    path('calendar/outlook/', OutlookCalendarExportView.as_view(), name='calendar-outlook'),
+    path('calendar/ics/', ICSExportView.as_view(), name='calendar-ics'),
+    path('calendar/options/', CalendarExportOptionsView.as_view(), name='calendar-options'),
 ]   
