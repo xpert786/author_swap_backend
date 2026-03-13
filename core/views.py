@@ -1441,7 +1441,14 @@ class SubscriberAnalyticsView(APIView):
         
         # After sync, get fresh status counts directly from MailerLite API
         # This ensures we have the most up-to-date data matching the dashboard
+        from django.conf import settings
         api_key = getattr(verification, 'mailerlite_api_key', None)
+        if not api_key:
+            api_key = getattr(settings, 'MAILERLITE_API_KEY', None)
+            print(f"[SYNC] Using API key from settings")
+        else:
+            print(f"[SYNC] Using API key from user verification")
+            
         if api_key and verification.is_connected_mailerlite:
             try:
                 status_counts = get_subscriber_counts_by_status(api_key)

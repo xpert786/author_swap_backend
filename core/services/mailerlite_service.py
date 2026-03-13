@@ -272,10 +272,18 @@ def sync_subscriber_analytics(user):
     """
     from core.models import SubscriberVerification, CampaignAnalytic
     from django.utils import timezone
+    from django.conf import settings
     import random
     
     verification, _ = SubscriberVerification.objects.get_or_create(user=user)
+    
+    # Check for API key in user's verification first, then fall back to settings
     api_key = getattr(verification, 'mailerlite_api_key', None)
+    if not api_key:
+        api_key = getattr(settings, 'MAILERLITE_API_KEY', None)
+        logger.info(f"[DIAGNOSTIC] Using API key from settings for user {user.username}")
+    else:
+        logger.info(f"[DIAGNOSTIC] Using API key from user verification for user {user.username}")
     
     headers = _get_headers(api_key)
     if not headers.get("Authorization") or not verification.is_connected_mailerlite:
