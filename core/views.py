@@ -24,8 +24,11 @@ from .models import (
 )
 import calendar
 from datetime import datetime, date, timedelta
+from django.utils import timezone
+from django.db.models import Count, Q, Avg
+from django.db.models.functions import ExtractMonth
+import pytz
 from rest_framework.generics import ListAPIView, RetrieveAPIView, ListCreateAPIView, RetrieveUpdateDestroyAPIView
-from django.db.models import Count, Q
 
 from urllib.parse import urlencode
 from django.http import HttpResponse
@@ -1476,9 +1479,6 @@ class SubscriberAnalyticsView(APIView):
         campaigns = CampaignAnalytic.objects.filter(user=request.user)
         
         # 1. Historical Trends aggregation & Metrics Calculation
-        from django.db.models import Avg
-        from django.db.models.functions import ExtractMonth
-        import pytz
         
         month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
         now = timezone.now()
