@@ -1427,10 +1427,44 @@ class SubscriberAnalyticsView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        from core.services.mailerlite_service import sync_subscriber_analytics
+        from core.services.mailerlite_service import sync_subscriber_analytics, get_subscriber_counts_by_status
+        
+        # DEBUG: Force refresh from database
+        from core.models import SubscriberVerification
+        verification = SubscriberVerification.objects.get(user=request.user)
+        print(f"[DEBUG] Before sync - active_subscribers: {verification.active_subscribers}, audience_size: {verification.audience_size}")
         
         # Trigger real-time sync
         verification = sync_subscriber_analytics(request.user)
+        
+        print(f"[DEBUG] After sync - active_subscribers: {verification.active_subscribers}, audience_size: {verification.audience_size}")
+        
+        # After sync, get fresh status counts directly from MailerLite API
+        # This ensures we have the most up-to-date data matching the dashboard
+        api_key = getattr(verification, 'mailerlite_api_key', None)
+        if api_key and verification.is_connected_mailerlite:
+            try:
+                status_counts = get_subscriber_counts_by_status(api_key)
+                if status_counts and status_counts.get('active', 0) > 0:
+                    # Update verification with latest counts
+                    verification.active_subscribers = status_counts.get('active', 0)
+                    verification.unsubscribed_subscribers = status_counts.get('unsubscribed', 0)
+                    verification.unconfirmed_subscribers = status_counts.get('unconfirmed', 0)
+                    verification.bounced_subscribers = status_counts.get('bounced', 0)
+                    verification.junk_subscribers = status_counts.get('junk', 0)
+                    # Also update audience_size to match the active count from MailerLite
+                    verification.audience_size = status_counts.get('active', 0)
+                    verification.save()
+                    print(f"[SYNC] Updated active_subscribers to {verification.active_subscribers}")
+                else:
+                    print(f"[SYNC] No valid status counts returned, keeping existing values")
+            except Exception as e:
+                print(f"[SYNC ERROR] Failed to fetch fresh counts: {e}")
+                print(f"[SYNC] Keeping existing database values")
+        
+        # Final check - refresh from database
+        verification.refresh_from_db()
+        print(f"[DEBUG] Final - active_subscribers: {verification.active_subscribers}, audience_size: {verification.audience_size}")
         
         growth_data = SubscriberGrowth.objects.filter(user=request.user)
         campaigns = CampaignAnalytic.objects.filter(user=request.user)
@@ -1510,7 +1544,7 @@ class SubscriberAnalyticsView(APIView):
             },
             "summary_stats": {
                 "active_subscribers": {
-                    "value": verification.audience_size,
+                    "value": verification.active_subscribers,
                     "delta": "+312",
                     "delta_text": "this month",
                     "is_positive": True
