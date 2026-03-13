@@ -1449,8 +1449,11 @@ class SubscriberAnalyticsView(APIView):
                     verification.audience_size = status_counts.get('active', 0)
                     verification.save()
                     print(f"[SYNC] Updated active_subscribers to {verification.active_subscribers}")
+                else:
+                    print(f"[SYNC] No valid status counts returned, keeping existing values")
             except Exception as e:
                 print(f"[SYNC ERROR] Failed to fetch fresh counts: {e}")
+                print(f"[SYNC] Keeping existing database values")
         
         growth_data = SubscriberGrowth.objects.filter(user=request.user)
         campaigns = CampaignAnalytic.objects.filter(user=request.user)

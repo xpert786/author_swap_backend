@@ -258,8 +258,10 @@ def sync_profile_audience(profile, api_key: str = None) -> int:
         ).update(audience_size=audience)
     
     verification, _ = SubscriberVerification.objects.get_or_create(user=profile.user)
-    verification.audience_size = audience
-    verification.save()
+    # Only update audience_size if we get valid data (> 0)
+    if audience > 0:
+        verification.audience_size = audience
+        verification.save()
     
     return audience
 
@@ -311,18 +313,19 @@ def sync_subscriber_analytics(user):
         logger.info(f"Fetching status counts for user {user.username}, api_key present: {bool(api_key)}, is_connected: {verification.is_connected_mailerlite}")
         status_counts = get_subscriber_counts_by_status(api_key)
         logger.info(f"Status counts result: {status_counts}")
-        if status_counts:
+        if status_counts and status_counts.get('active', 0) > 0:
+            # Only update if we get valid data (active > 0)
             verification.active_subscribers = status_counts.get('active', 0)
             verification.unsubscribed_subscribers = status_counts.get('unsubscribed', 0)
             verification.unconfirmed_subscribers = status_counts.get('unconfirmed', 0)
             verification.bounced_subscribers = status_counts.get('bounced', 0)
             verification.junk_subscribers = status_counts.get('junk', 0)
             # Also update audience_size to match active count from breakdown
-            if status_counts.get('active', 0) > 0:
-                verification.audience_size = status_counts.get('active', 0)
+            verification.audience_size = status_counts.get('active', 0)
             logger.info(f"Updated subscriber status counts for user {user.username}: active={verification.active_subscribers}, unconfirmed={verification.unconfirmed_subscribers}, unsubscribed={verification.unsubscribed_subscribers}")
         else:
-            logger.warning(f"No status counts returned for user {user.username} - API key format may be incorrect (should start with 'mlsn.') or connection issue")
+            logger.warning(f"No valid status counts returned for user {user.username} - keeping existing values")
+            # Don't override existing values if API call fails
 
         # 4. Overall Stats
         # MailerLite new API might have different stats endpoint, fallback to basic calculation if needed
