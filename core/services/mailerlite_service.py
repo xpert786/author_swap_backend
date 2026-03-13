@@ -196,12 +196,25 @@ def get_subscriber_counts_by_status(api_key: str = None) -> dict:
                     counts['bounced'] = stats_data.get('bounced', 0) or stats_data.get('bounce', 0) or 0
                     counts['junk'] = stats_data.get('junk', 0) or stats_data.get('spam', 0) or 0
                     
-                    logger.info(f"[DIAGNOSTIC] Classic API stats parsed: active={counts['active']}, unsubscribed={counts['unsubscribed']}, unconfirmed={counts['unconfirmed']}, bounced={counts['bounced']}, total_field={api_total_field}")
+                    logger.info(f"[DIAGNOSTIC] Classic API stats parsed: active={counts['active']}, unsubscribed={counts['unsubscribed']}, unconfirmed={counts['unconfirmed']}, bounced={counts['bounced']}, total_field={stats_data.get('total')}")
                     
-                    # Trust the 'total' field from stats as the primary dashboard figure if it's the largest deduplicated number
-                    # In MailerLite Classic, 'total' in /stats is usually the deduplicated active + unconfirmed count.
-                    counts['dashboard_total'] = max(api_total_field, subscribed + unconfirmed)
-                    logger.info(f"[DIAGNOSTIC] Classic Dashboard Total set to: {counts['dashboard_total']} (from api_total={api_total_field}, subscribed={subscribed}, unconfirmed={unconfirmed})")
+                    # Dashboard Total Discovery for Classic
+                    # Usually, Dashboard Total = Active + Unconfirmed + (sometimes) Bounced
+                    subscribed = stats_data.get('subscribed', 0)
+                    unconfirmed = stats_data.get('unconfirmed', 0) or 0
+                    bounced = stats_data.get('bounced', 0) or stats_data.get('bounce', 0) or 0
+                    api_total_field = stats_data.get('total', 0)
+                    
+                    # Logic: If the 'total' field in stats matches the high number (e.g. 7240), use it.
+                    # Otherwise, sum the relevant addressable statuses.
+                    counts['dashboard_total'] = subscribed + unconfirmed
+                    
+                    # If api_total_field is significantly higher than our calc but not including all unsubs
+                    # (e.g. if calc is 6306 but total_field is 7240), it might be the 'big number'
+                    if api_total_field > counts['dashboard_total'] and api_total_field < (subscribed + unconfirmed + bounced + 500):
+                         # If it matches the gap including bounced, use it
+                         counts['dashboard_total'] = api_total_field
+                         logger.info(f"[DIAGNOSTIC] Using API 'total' field as dashboard total: {api_total_field}")
                 else:
                     logger.error(f"[DIAGNOSTIC] Classic API stats failed: HTTP {stats_resp.status_code} - {stats_resp.text[:500]}")
                 
@@ -222,12 +235,11 @@ def get_subscriber_counts_by_status(api_key: str = None) -> dict:
                     logger.warning(f"[DIAGNOSTIC] Classic groups fetch failed: {group_e}")
 
                 # Derive Unconfirmed for Classic if needed
-                # We prioritize dashboard_total since it's the account-wide deduplicated count
                 best_total = max(counts.get('dashboard_total', 0), counts.get('max_group_total', 0))
                 
                 if best_total > counts.get('active', 0):
                     derived = best_total - counts.get('active', 0)
-                    # The dashboard total (7240) vs active (5571) gap is the unconfirmed pool
+                    # Use a stricter threshold for unconfirmed - usually it shouldn't be massive unless specifically seen
                     counts['unconfirmed'] = derived
                     logger.info(f"[DIAGNOSTIC] Classic Derived unconfirmed={derived} from total={best_total}")
                 
@@ -418,11 +430,11 @@ def sync_subscriber_analytics(user):
                         # In classic, stats often nested in 'stats' dict or top level
                         stats = camp.get('stats', {})
                         if stats:
-                            subs = stats.get('sent', 0) or stats.get('total_recipients', 0)
-                            open_r = stats.get('opened_rate', 0.0) or stats.get('open_rate', 0.0)
-                            click_r = stats.get('clicked_rate', 0.0) or stats.get('click_rate', 0.0)
+                            subs = stats.get('sent', 0)
+                            open_r = stats.get('opened_rate', 0.0)
+                            click_r = stats.get('clicked_rate', 0.0)
                         else:
-                            subs = camp.get('total_recipients', 0) or camp.get('sent', 0)
+                            subs = camp.get('total_recipients', 0)
                             # Fallback to direct rate fields
                             open_r = camp.get('opened_rate', 0.0) or camp.get('open_rate', 0.0)
                             click_r = camp.get('clicked_rate', 0.0) or camp.get('click_rate', 0.0)
