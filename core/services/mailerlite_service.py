@@ -41,7 +41,7 @@ def get_subscriber_counts_by_status(api_key: str = None) -> dict:
         return {}
 
     is_new_api = api_key.startswith("mlsn.")
-    logger.info(f"API key format check: is_new_api={is_new_api}, key starts with: {api_key[:10]}...")
+    logger.info(f"[DIAGNOSTIC] API key format check: is_new_api={is_new_api}, key prefix: {api_key[:15]}...")
     
     # Status mapping: internal name -> MailerLite status name
     statuses = ['active', 'unsubscribed', 'unconfirmed', 'bounced', 'junk']
@@ -58,30 +58,56 @@ def get_subscriber_counts_by_status(api_key: str = None) -> dict:
             
             for status in statuses:
                 # Use limit=0 as suggested - we only need the count from meta
-                response = requests.get(
-                    url, 
-                    headers=headers, 
-                    params={"limit": 0, "filter[status]": status}, 
-                    timeout=10
-                )
-                if response.status_code == 200:
-                    data = response.json()
-                    count = data.get('meta', {}).get('total', 0)
-                    counts[status] = count
-                    logger.info(f"Status '{status}': {count} subscribers")
-                else:
-                    logger.warning(f"Failed to fetch {status} count: {response.status_code} - {response.text[:200]}")
+                try:
+                    response = requests.get(
+                        url, 
+                        headers=headers, 
+                        params={"limit": 0, "filter[status]": status}, 
+                        timeout=10
+                    )
+                    if response.status_code == 200:
+                        data = response.json()
+                        count = data.get('meta', {}).get('total', 0)
+                        counts[status] = count
+                        logger.info(f"[DIAGNOSTIC] Status '{status}': {count} subscribers")
+                    else:
+                        logger.error(f"[DIAGNOSTIC] FAILED to fetch {status} count: HTTP {response.status_code} - {response.text[:300]}")
+                        counts[status] = 0
+                except Exception as inner_e:
+                    logger.error(f"[DIAGNOSTIC] Exception fetching {status}: {inner_e}")
                     counts[status] = 0
                     
-            logger.info(f"MailerLite status counts fetched successfully: {counts}")
+            logger.info(f"[DIAGNOSTIC] MailerLite status counts fetched: {counts}")
             return counts
         else:
-            # Classic API doesn't support status filtering in the same way
-            logger.warning("Classic API detected - status breakdown not supported")
-            return {}
+            # Classic API - use the stats endpoint which provides basic counts
+            logger.warning(f"[DIAGNOSTIC] Classic API detected (key doesn't start with 'mlsn.'). Using fallback stats endpoint. Key prefix: {api_key[:10]}...")
+            try:
+                url = "https://api.mailerlite.com/api/v2/stats"
+                headers = {
+                    "Content-Type": "application/json",
+                    "X-MailerLite-ApiKey": api_key
+                }
+                response = requests.get(url, headers=headers, timeout=10)
+                if response.status_code == 200:
+                    data = response.json()
+                    # Classic stats returns various counts
+                    counts['active'] = data.get('subscribed', 0)
+                    counts['unsubscribed'] = data.get('unsubscribed', 0)
+                    counts['unconfirmed'] = data.get('unconfirmed', 0)  # May not exist in classic
+                    counts['bounced'] = data.get('bounced', 0)  # May not exist in classic
+                    counts['junk'] = 0  # Not available in classic API
+                    logger.info(f"[DIAGNOSTIC] Classic API stats fetched: {counts}")
+                    return counts
+                else:
+                    logger.error(f"[DIAGNOSTIC] Classic API stats failed: HTTP {response.status_code} - {response.text[:300]}")
+                    return {}
+            except Exception as classic_e:
+                logger.error(f"[DIAGNOSTIC] Classic API stats exception: {classic_e}")
+                return {}
             
     except Exception as e:
-        logger.error(f"MailerLite get_subscriber_counts_by_status failed: {e}")
+        logger.error(f"[DIAGNOSTIC] MailerLite get_subscriber_counts_by_status failed: {e}")
         return {}
 
 
