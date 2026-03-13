@@ -1535,6 +1535,21 @@ class SubscriberAnalyticsView(APIView):
                 },
             },
             "growth_chart": SubscriberGrowthSerializer(growth_data, many=True).data,
+            "subscriber_status_breakdown": {
+                "active": verification.active_subscribers,
+                "unsubscribed": verification.unsubscribed_subscribers,
+                "unconfirmed": verification.unconfirmed_subscribers,
+                "bounced": verification.bounced_subscribers,
+                "junk": verification.junk_subscribers,
+                "total": (
+                    verification.active_subscribers + 
+                    verification.unsubscribed_subscribers + 
+                    verification.unconfirmed_subscribers + 
+                    verification.bounced_subscribers + 
+                    verification.junk_subscribers
+                ),
+                "dashboard_comparison_note": "Dashboard total may include 'unconfirmed' subscribers. API 'active' count only includes confirmed subscribers."
+            },
             "list_health_metrics": {
                 "bounce_rate": f"{verification.bounce_rate}%",
                 "unsubscribe_rate": f"{verification.unsubscribe_rate}%",

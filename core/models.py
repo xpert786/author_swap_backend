@@ -168,6 +168,13 @@ class SubscriberVerification(models.Model):
     active_rate = models.FloatField(default=0)
     avg_engagement = models.FloatField(default=0)
     
+    # Subscriber Status Breakdown (for MailerLite API analytics)
+    active_subscribers = models.PositiveIntegerField(default=0)
+    unsubscribed_subscribers = models.PositiveIntegerField(default=0)
+    unconfirmed_subscribers = models.PositiveIntegerField(default=0)
+    bounced_subscribers = models.PositiveIntegerField(default=0)
+    junk_subscribers = models.PositiveIntegerField(default=0, help_text="Spam/junk flagged subscribers")
+    
     def __str__(self):
         return f"{self.user.username} Verification"
 
