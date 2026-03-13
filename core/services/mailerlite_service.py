@@ -196,10 +196,25 @@ def get_subscriber_counts_by_status(api_key: str = None) -> dict:
                     counts['bounced'] = stats_data.get('bounced', 0) or stats_data.get('bounce', 0) or 0
                     counts['junk'] = stats_data.get('junk', 0) or stats_data.get('spam', 0) or 0
                     
-                    logger.info(f"[DIAGNOSTIC] Classic API stats parsed: active={counts['active']}, unsubscribed={counts['unsubscribed']}, unconfirmed={counts['unconfirmed']}")
-                    # Use 'subscribed' + 'unconfirmed' for dashboard_total if stats provide them
-                    # Sometimes 'total' in stats is EVERYTHING (including bounced/unsub), so we prefer sum of specific statuses for "Dashboard Total"
-                    counts['dashboard_total'] = stats_data.get('subscribed', 0) + (stats_data.get('unconfirmed', 0) or 0)
+                    logger.info(f"[DIAGNOSTIC] Classic API stats parsed: active={counts['active']}, unsubscribed={counts['unsubscribed']}, unconfirmed={counts['unconfirmed']}, bounced={counts['bounced']}, total_field={stats_data.get('total')}")
+                    
+                    # Dashboard Total Discovery for Classic
+                    # Usually, Dashboard Total = Active + Unconfirmed + (sometimes) Bounced
+                    subscribed = stats_data.get('subscribed', 0)
+                    unconfirmed = stats_data.get('unconfirmed', 0) or 0
+                    bounced = stats_data.get('bounced', 0) or stats_data.get('bounce', 0) or 0
+                    api_total_field = stats_data.get('total', 0)
+                    
+                    # Logic: If the 'total' field in stats matches the high number (e.g. 7240), use it.
+                    # Otherwise, sum the relevant addressable statuses.
+                    counts['dashboard_total'] = subscribed + unconfirmed
+                    
+                    # If api_total_field is significantly higher than our calc but not including all unsubs
+                    # (e.g. if calc is 6306 but total_field is 7240), it might be the 'big number'
+                    if api_total_field > counts['dashboard_total'] and api_total_field < (subscribed + unconfirmed + bounced + 500):
+                         # If it matches the gap including bounced, use it
+                         counts['dashboard_total'] = api_total_field
+                         logger.info(f"[DIAGNOSTIC] Using API 'total' field as dashboard total: {api_total_field}")
                 else:
                     logger.error(f"[DIAGNOSTIC] Classic API stats failed: HTTP {stats_resp.status_code} - {stats_resp.text[:500]}")
                 
@@ -209,21 +224,28 @@ def get_subscriber_counts_by_status(api_key: str = None) -> dict:
                     groups_resp = requests.get("https://api.mailerlite.com/api/v2/groups", headers=headers, timeout=10)
                     if groups_resp.status_code == 200:
                         groups_data = groups_resp.json()
+                        logger.info(f"[DIAGNOSTIC] Classic API Groups count: {len(groups_data) if isinstance(groups_data, list) else 'N/A'}")
                         if isinstance(groups_data, list) and groups_data:
                             # We check both 'total' and 'subscribers_count'
+                            # Also sum groups that might be the main lists
                             max_total = max(max(g.get('total', 0), g.get('subscribers_count', 0)) for g in groups_data)
                             counts['max_group_total'] = max_total
-                            logger.info(f"[DIAGNOSTIC] Classic API Max group subscribers: {max_total}")
+                            
+                            # Optional: sum if they look like non-overlapping shards, but usually max is safer
+                            # Unless for this specific user they are segmented
+                            group_sum = sum(max(g.get('total', 0), g.get('subscribers_count', 0)) for g in groups_data)
+                            counts['group_sum_total'] = group_sum
+                            logger.info(f"[DIAGNOSTIC] Classic API Max group: {max_total}, Sum groups: {group_sum}")
                 except Exception as group_e:
                     logger.warning(f"[DIAGNOSTIC] Classic groups fetch failed: {group_e}")
 
                 # Derive Unconfirmed for Classic if needed
-                # If dashboard says 7240 but active is 5571, the diff (1669) must be unconfirmed
-                best_total = max(counts.get('dashboard_total', 0), counts.get('max_group_total', 0))
+                best_total = max(counts.get('dashboard_total', 0), counts.get('max_group_total', 0), counts.get('group_sum_total', 0))
                 if best_total > counts.get('active', 0):
                     derived = best_total - counts.get('active', 0)
-                    # Only override if the current unconfirmed is less than the gap
-                    if counts.get('unconfirmed', 0) < derived:
+                    # If our derived unconfirmed is significant, prioritize it over the stats field 
+                    # as stats might be delayed or filtered.
+                    if (counts.get('unconfirmed', 0) or 0) < derived:
                         counts['unconfirmed'] = derived
                         logger.info(f"[DIAGNOSTIC] Classic Derived unconfirmed={derived} from total={best_total}")
                 
@@ -393,37 +415,42 @@ def sync_subscriber_analytics(user):
         params = {"limit": 5}
         
         campaigns_resp = requests.get(campaign_url, headers=headers, params=params, timeout=10)
+        logger.info(f"[DIAGNOSTIC] Campaigns fetch: HTTP {campaigns_resp.status_code} for {campaign_url}")
         if campaigns_resp.status_code == 200:
             data = campaigns_resp.json()
-            campaigns = data.get('data', []) if is_new_api else data
+            campaigns_list = data.get('data', []) if is_new_api else data
+            logger.info(f"[DIAGNOSTIC] Found {len(campaigns_list)} campaigns")
             
-            for camp in campaigns:
-                if is_new_api:
-                    name = camp.get('subject') or camp.get('name')
-                    date_val = camp.get('sent_at') or timezone.now().date()
-                    subs = camp.get('total_recipients', 0)
-                    open_r = camp.get('open_rate_percent', 0.0)
-                    click_r = camp.get('click_rate_percent', 0.0)
-                else:
-                    name = camp.get('subject')
-                    date_val = camp.get('date_sent') or timezone.now().date()
-                    # Classic campaigns have 'opened' and 'clicked' as counts, rates are in 'stats'
-                    stats = camp.get('stats', {})
-                    subs = stats.get('sent', 0)
-                    open_r = stats.get('opened_rate', 0.0)
-                    click_r = stats.get('clicked_rate', 0.0)
+            for camp in campaigns_list:
+                try:
+                    if is_new_api:
+                        name = camp.get('subject') or camp.get('name')
+                        date_val = camp.get('sent_at') or timezone.now().date()
+                        subs = camp.get('total_recipients', 0)
+                        open_r = camp.get('open_rate_percent', 0.0)
+                        click_r = camp.get('click_rate_percent', 0.0)
+                    else:
+                        name = camp.get('subject') or camp.get('name') or "Untitled Campaign"
+                        date_val = camp.get('date_sent') or timezone.now().date()
+                        # Classic campaigns have 'opened' and 'clicked' as counts, rates are in 'stats'
+                        stats = camp.get('stats', {})
+                        subs = stats.get('sent', 0)
+                        open_r = stats.get('opened_rate', 0.0)
+                        click_r = stats.get('clicked_rate', 0.0)
 
-                CampaignAnalytic.objects.update_or_create(
-                    user=user,
-                    name=name,
-                    defaults={
-                        'date': date_val,
-                        'subscribers': subs,
-                        'open_rate': open_r,
-                        'click_rate': click_r,
-                        'type': 'Recent'
-                    }
-                )
+                    CampaignAnalytic.objects.update_or_create(
+                        user=user,
+                        name=name,
+                        defaults={
+                            'date': date_val,
+                            'subscribers': subs,
+                            'open_rate': open_r,
+                            'click_rate': click_r,
+                            'type': 'Recent'
+                        }
+                    )
+                except Exception as camp_e:
+                    logger.error(f"[DIAGNOSTIC] Error processing campaign {camp.get('id')}: {camp_e}")
 
         # 3. Fetch Subscriber Status Breakdown
         logger.info(f"Fetching status counts for user {user.username}, is_new={is_new_api}")
