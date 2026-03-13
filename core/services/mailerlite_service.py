@@ -227,30 +227,23 @@ def get_subscriber_counts_by_status(api_key: str = None) -> dict:
                         logger.info(f"[DIAGNOSTIC] Classic API Groups count: {len(groups_data) if isinstance(groups_data, list) else 'N/A'}")
                         if isinstance(groups_data, list) and groups_data:
                             # We check both 'total' and 'subscribers_count'
-                            # Also sum groups that might be the main lists
+                            # Use max() because subscribers can belong to multiple groups; sum() overcounts.
                             max_total = max(max(g.get('total', 0), g.get('subscribers_count', 0)) for g in groups_data)
                             counts['max_group_total'] = max_total
-                            
-                            # Optional: sum if they look like non-overlapping shards, but usually max is safer
-                            # Unless for this specific user they are segmented
-                            group_sum = sum(max(g.get('total', 0), g.get('subscribers_count', 0)) for g in groups_data)
-                            counts['group_sum_total'] = group_sum
-                            logger.info(f"[DIAGNOSTIC] Classic API Max group: {max_total}, Sum groups: {group_sum}")
+                            logger.info(f"[DIAGNOSTIC] Classic API Max group: {max_total}")
                 except Exception as group_e:
                     logger.warning(f"[DIAGNOSTIC] Classic groups fetch failed: {group_e}")
 
                 # Derive Unconfirmed for Classic if needed
-                best_total = max(counts.get('dashboard_total', 0), counts.get('max_group_total', 0), counts.get('group_sum_total', 0))
+                best_total = max(counts.get('dashboard_total', 0), counts.get('max_group_total', 0))
+                
                 if best_total > counts.get('active', 0):
                     derived = best_total - counts.get('active', 0)
-                    # If our derived unconfirmed is significant, prioritize it over the stats field 
-                    # as stats might be delayed or filtered.
-                    if (counts.get('unconfirmed', 0) or 0) < derived:
-                        counts['unconfirmed'] = derived
-                        logger.info(f"[DIAGNOSTIC] Classic Derived unconfirmed={derived} from total={best_total}")
+                    # Use a stricter threshold for unconfirmed - usually it shouldn't be massive unless specifically seen
+                    counts['unconfirmed'] = derived
+                    logger.info(f"[DIAGNOSTIC] Classic Derived unconfirmed={derived} from total={best_total}")
                 
-                if best_total > counts.get('dashboard_total', 0):
-                    counts['dashboard_total'] = best_total
+                counts['dashboard_total'] = best_total
                 
                 # If still no active count, try fetching subscribers with high limit
                 if counts['active'] == 0:
@@ -430,13 +423,21 @@ def sync_subscriber_analytics(user):
                         open_r = camp.get('open_rate_percent', 0.0)
                         click_r = camp.get('click_rate_percent', 0.0)
                     else:
+                        # Classic sent campaigns mapping
                         name = camp.get('subject') or camp.get('name') or "Untitled Campaign"
                         date_val = camp.get('date_sent') or timezone.now().date()
-                        # Classic campaigns have 'opened' and 'clicked' as counts, rates are in 'stats'
+                        
+                        # In classic, stats often nested in 'stats' dict or top level
                         stats = camp.get('stats', {})
-                        subs = stats.get('sent', 0)
-                        open_r = stats.get('opened_rate', 0.0)
-                        click_r = stats.get('clicked_rate', 0.0)
+                        if stats:
+                            subs = stats.get('sent', 0)
+                            open_r = stats.get('opened_rate', 0.0)
+                            click_r = stats.get('clicked_rate', 0.0)
+                        else:
+                            subs = camp.get('total_recipients', 0)
+                            # Fallback to direct rate fields
+                            open_r = camp.get('opened_rate', 0.0) or camp.get('open_rate', 0.0)
+                            click_r = camp.get('clicked_rate', 0.0) or camp.get('click_rate', 0.0)
 
                     CampaignAnalytic.objects.update_or_create(
                         user=user,
