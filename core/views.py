@@ -1566,7 +1566,7 @@ class SubscriberAnalyticsView(APIView):
             },
             "summary_stats": {
                 "active_subscribers": {
-                    "value": verification.active_subscribers,
+                    "value": verification.audience_size,
                     "delta": sub_delta_str,
                     "delta_text": "this month",
                     "is_positive": sub_delta >= 0
@@ -1597,13 +1597,7 @@ class SubscriberAnalyticsView(APIView):
                 "unconfirmed": verification.unconfirmed_subscribers,
                 "bounced": verification.bounced_subscribers,
                 "junk": verification.junk_subscribers,
-                "total": (
-                    verification.active_subscribers + 
-                    verification.unsubscribed_subscribers + 
-                    verification.unconfirmed_subscribers + 
-                    verification.bounced_subscribers + 
-                    verification.junk_subscribers
-                ),
+                "total": verification.audience_size,
                 "dashboard_comparison_note": "Dashboard total may include 'unconfirmed' subscribers. API 'active' count only includes confirmed subscribers."
             },
             "list_health_metrics": {

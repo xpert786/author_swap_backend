@@ -85,7 +85,18 @@ def get_subscriber_counts_by_status(api_key: str = None) -> dict:
                 except Exception as inner_e:
                     logger.error(f"[DIAGNOSTIC] Exception fetching {status}: {inner_e}")
                     counts[status] = 0
-                    
+            
+            # Add a 'dashboard_total' fetch - usually matches Active + Unconfirmed
+            try:
+                # Try fetching without status filter to see what the base total is
+                base_resp = requests.get(url, headers=headers, params={"limit": 1}, timeout=10)
+                if base_resp.status_code == 200:
+                    base_total = base_resp.json().get('meta', {}).get('total', 0)
+                    counts['dashboard_total'] = base_total
+                    logger.info(f"[DIAGNOSTIC] Base subscribers total: {base_total}")
+            except Exception:
+                pass
+
             logger.info(f"[DIAGNOSTIC] MailerLite status counts fetched: {counts}")
             return counts  # Return counts even if 0
         else:
@@ -340,8 +351,14 @@ def sync_subscriber_analytics(user):
             verification.unconfirmed_subscribers = status_counts.get('unconfirmed', 0)
             verification.bounced_subscribers = status_counts.get('bounced', 0)
             verification.junk_subscribers = status_counts.get('junk', 0)
-            # Also update audience_size to match active count from breakdown
-            verification.audience_size = status_counts.get('active', 0)
+            
+            # Use dashboard_total if provided, otherwise fallback to active + unconfirmed
+            db_total = status_counts.get('dashboard_total', 0)
+            if db_total == 0:
+                db_total = verification.active_subscribers + verification.unconfirmed_subscribers
+            
+            # Update audience_size to match the "Big Number" (Active + Unconfirmed)
+            verification.audience_size = db_total
             
             # --- Added: Update/Create SubscriberGrowth Record for Current Month ---
             from core.models import SubscriberGrowth
