@@ -1,7 +1,7 @@
 import logging
 import requests
 from django.conf import settings
-import timezone
+from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
