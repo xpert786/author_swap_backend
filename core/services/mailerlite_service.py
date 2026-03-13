@@ -67,18 +67,19 @@ def get_subscriber_counts_by_status(api_key: str = None) -> dict:
                     )
                     if response.status_code == 200:
                         data = response.json()
+                        logger.info(f"[DIAGNOSTIC] Raw response for {status}: {data}")
                         count = data.get('meta', {}).get('total', 0)
                         counts[status] = count
                         logger.info(f"[DIAGNOSTIC] Status '{status}': {count} subscribers")
                     else:
-                        logger.error(f"[DIAGNOSTIC] FAILED to fetch {status} count: HTTP {response.status_code} - {response.text[:300]}")
+                        logger.error(f"[DIAGNOSTIC] Failed to fetch {status}: HTTP {response.status_code} - {response.text}")
                         counts[status] = 0
                 except Exception as inner_e:
                     logger.error(f"[DIAGNOSTIC] Exception fetching {status}: {inner_e}")
                     counts[status] = 0
                     
             logger.info(f"[DIAGNOSTIC] MailerLite status counts fetched: {counts}")
-            return counts
+            return counts  # Return counts even if 0
         else:
             # Classic API - use the V2 subscribers endpoint with count
             logger.warning(f"[DIAGNOSTIC] Classic API detected (key doesn't start with 'mlsn.'). Using V2 subscribers endpoint. Key prefix: {api_key[:10]}...")
@@ -167,7 +168,7 @@ def get_subscriber_counts_by_status(api_key: str = None) -> dict:
                         logger.error(f"[DIAGNOSTIC] High limit fetch failed: HTTP {high_limit_resp.status_code}")
                 
                 logger.info(f"[DIAGNOSTIC] Classic API final counts: {counts}")
-                return counts if counts.get('active', 0) > 0 or counts.get('unsubscribed', 0) > 0 else {}
+                return counts  # Return whatever we found
                 
             except Exception as classic_e:
                 logger.error(f"[DIAGNOSTIC] Classic API exception: {classic_e}")
@@ -321,8 +322,8 @@ def sync_subscriber_analytics(user):
         logger.info(f"Fetching status counts for user {user.username}, api_key present: {bool(api_key)}, is_connected: {verification.is_connected_mailerlite}")
         status_counts = get_subscriber_counts_by_status(api_key)
         logger.info(f"Status counts result: {status_counts}")
-        if status_counts and status_counts.get('active', 0) > 0:
-            # Only update if we get valid data (active > 0)
+        if status_counts is not None:
+            # Update verification with latest counts (even if 0)
             verification.active_subscribers = status_counts.get('active', 0)
             verification.unsubscribed_subscribers = status_counts.get('unsubscribed', 0)
             verification.unconfirmed_subscribers = status_counts.get('unconfirmed', 0)
@@ -330,7 +331,42 @@ def sync_subscriber_analytics(user):
             verification.junk_subscribers = status_counts.get('junk', 0)
             # Also update audience_size to match active count from breakdown
             verification.audience_size = status_counts.get('active', 0)
-            logger.info(f"Updated subscriber status counts for user {user.username}: active={verification.active_subscribers}, unconfirmed={verification.unconfirmed_subscribers}, unsubscribed={verification.unsubscribed_subscribers}")
+            
+            # --- Added: Update/Create SubscriberGrowth Record for Current Month ---
+            from core.models import SubscriberGrowth
+            current_date = timezone.now()
+            month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+            current_month_name = month_names[current_date.month - 1]
+            
+            SubscriberGrowth.objects.update_or_create(
+                user=user,
+                month=current_month_name,
+                year=current_date.year,
+                defaults={'count': verification.active_subscribers}
+            )
+            
+            # Update average rates from latest campaigns
+            latest_campaigns = CampaignAnalytic.objects.filter(user=user).order_by('-date')[:5]
+            if latest_campaigns.exists():
+                total_open = sum(c.open_rate for c in latest_campaigns)
+                total_click = sum(c.click_rate for c in latest_campaigns)
+                count = latest_campaigns.count()
+                verification.avg_open_rate = round(total_open / count, 1)
+                verification.avg_click_rate = round(total_click / count, 1)
+                
+                # Health Score calculation
+                health_score = int(min(100, (verification.avg_open_rate + (verification.avg_click_rate * 3))))
+                verification.list_health_score = health_score
+                
+                # Metrics
+                total_subs = verification.active_subscribers + verification.unsubscribed_subscribers + verification.bounced_subscribers
+                if total_subs > 0:
+                    verification.bounce_rate = round((verification.bounced_subscribers / total_subs) * 100, 1)
+                    verification.unsubscribe_rate = round((verification.unsubscribed_subscribers / total_subs) * 100, 1)
+                    verification.active_rate = round((verification.active_subscribers / total_subs) * 100, 1)
+                verification.avg_engagement = round(verification.avg_open_rate / 10, 1)
+
+            logger.info(f"Updated subscriber status counts for user {user.username}: active={verification.active_subscribers}")
         else:
             logger.warning(f"No valid status counts returned for user {user.username} - keeping existing values")
             # Don't override existing values if API call fails

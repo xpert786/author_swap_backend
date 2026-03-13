@@ -1469,17 +1469,75 @@ class SubscriberAnalyticsView(APIView):
                 print(f"[SYNC ERROR] Failed to fetch fresh counts: {e}")
                 print(f"[SYNC] Keeping existing database values")
         
-        # Final check - refresh from database
+        # After sync, ensure we have the latest data
         verification.refresh_from_db()
-        print(f"[DEBUG] Final - active_subscribers: {verification.active_subscribers}, audience_size: {verification.audience_size}")
         
         growth_data = SubscriberGrowth.objects.filter(user=request.user)
         campaigns = CampaignAnalytic.objects.filter(user=request.user)
         
-        # Dynamically generate link-level analysis from actual User Slots & Swaps
+        # 1. Historical Trends aggregation & Metrics Calculation
+        from django.db.models import Avg
+        from django.db.models.functions import ExtractMonth
+        import pytz
+        
+        month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+        now = timezone.now()
+        current_year = now.year
+        
+        growth_records = {g.month: g.count for g in growth_data if g.year == current_year}
+        monthly_stats = campaigns.filter(date__year=current_year).annotate(
+            m=ExtractMonth('date')
+        ).values('m').annotate(
+            avg_open=Avg('open_rate'),
+            avg_click=Avg('click_rate')
+        )
+        stats_map = {item['m']: item for item in monthly_stats}
+        
+        historical_trends = []
+        for i, m_name in enumerate(month_names, 1):
+            s = stats_map.get(i, {})
+            historical_trends.append({
+                "month": m_name,
+                "open_rate": round(s.get('avg_open', 0.0), 1),
+                "click_rate": round(s.get('avg_click', 0.0), 1),
+                "subscriber_growth": growth_records.get(m_name, 0)
+            })
+
+        # 2. Calculate Stats Deltas
+        # Subscriber Delta (vs previous month)
+        sub_delta = 0
+        prev_month_idx = now.month - 2
+        if prev_month_idx >= 0:
+            prev_month_name = month_names[prev_month_idx]
+            prev_sub_count = growth_records.get(prev_month_name)
+            if prev_sub_count is not None:
+                sub_delta = verification.active_subscribers - prev_sub_count
+        sub_delta_str = f"+{sub_delta}" if sub_delta >= 0 else str(sub_delta)
+
+        # Open Rate Delta
+        curr_month_open = stats_map.get(now.month, {}).get('avg_open', verification.avg_open_rate)
+        prev_month_open = stats_map.get(now.month - 1, {}).get('avg_open', verification.avg_open_rate)
+        open_delta = curr_month_open - prev_month_open
+        open_delta_str = f"+{open_delta:.1f}%" if open_delta >= 0 else f"{open_delta:.1f}%"
+
+        # Click Rate Delta
+        curr_month_click = stats_map.get(now.month, {}).get('avg_click', verification.avg_click_rate)
+        prev_month_click = stats_map.get(now.month - 1, {}).get('avg_click', verification.avg_click_rate)
+        click_delta = curr_month_click - prev_month_click
+        click_delta_str = f"+{click_delta:.1f}%" if click_delta >= 0 else f"{click_delta:.1f}%"
+
+        # 3. Dynamic Sync Time
+        last_synced = "Never"
+        if verification.last_verified_at:
+            ist = pytz.timezone('Asia/Kolkata')
+            local_dt = verification.last_verified_at.astimezone(ist)
+            if local_dt.date() == now.astimezone(ist).date():
+                last_synced = local_dt.strftime("%I:%M %p Today")
+            else:
+                last_synced = local_dt.strftime("%b %d, %Y")
+
+        # 4. Link-level analysis from User Slots & Swaps
         link_level_ctr = []
-        from core.models import NewsletterSlot
-        # Get the user's newsletter slots, especially those in the past or with swaps
         slots = NewsletterSlot.objects.filter(user=request.user).prefetch_related(
             'swap_requests__requester__profiles', 
             'swap_requests__book',
@@ -1489,8 +1547,6 @@ class SubscriberAnalyticsView(APIView):
         for slot in slots:
             links = []
             has_swaps = False
-            
-            # Fetch partner link clicks for this slot's completed/scheduled/verified swaps
             for swap in slot.swap_requests.filter(status__in=['completed', 'verified', 'confirmed', 'sending', 'scheduled']):
                 has_swaps = True
                 for lc in swap.link_clicks.all():
@@ -1501,10 +1557,8 @@ class SubscriberAnalyticsView(APIView):
                         "clicks": lc.clicks,
                         "ctr": f"{lc.ctr}%",
                         "ctr_label": lc.ctr_label,
-                        "conversion": lc.conversion or "0 sales"
+                        "conversion": lc.conversions or "0 sales"
                     })
-                
-                # Fallback: if no SwapLinkClick tracker objects exist yet, generate a placeholder based on the Book promoted
                 if not swap.link_clicks.exists() and swap.book:
                     partner_name = swap.requester.username
                     if swap.requester.profiles.first():
@@ -1518,8 +1572,6 @@ class SubscriberAnalyticsView(APIView):
                         "ctr_label": "Pending Data",
                         "conversion": "-"
                     })
-            
-            # Add default links if slot was just a standalone campaign (no swaps yet)
             if not links:
                 links.append({
                     "id": f"slot_{slot.id}",
@@ -1530,47 +1582,40 @@ class SubscriberAnalyticsView(APIView):
                     "ctr_label": "Pending",
                     "conversion": "-"
                 })
-
-            # Decide on a campaign name formatting similar to Figma design
             campaign_type = "Swap" if has_swaps else "Newsletter"
             date_str = slot.send_date.strftime("%b %-d, %Y") if slot.send_date else "TBD"
             campaign_name = f"{campaign_type}: {slot.get_preferred_genre_display()} ({date_str})"
-            
-            link_level_ctr.append({
-                "campaign_id": slot.id,
-                "campaign_name": campaign_name,
-                "links": links
-            })
+            link_level_ctr.append({"campaign_id": slot.id, "campaign_name": campaign_name, "links": links})
 
         return Response({
             "connection_status": {
                 "connected": verification.is_connected_mailerlite,
                 "provider": "MailerLite",
                 "verified": verification.is_connected_mailerlite,
-                "last_synced": "04:30 PM Today"  # Usually dynamic, mock for UI
+                "last_synced": last_synced
             },
             "summary_stats": {
                 "active_subscribers": {
                     "value": verification.active_subscribers,
-                    "delta": "+312",
+                    "delta": sub_delta_str,
                     "delta_text": "this month",
-                    "is_positive": True
+                    "is_positive": sub_delta >= 0
                 },
                 "avg_open_rate": {
                     "value": f"{verification.avg_open_rate}%",
-                    "delta": "+21%",
+                    "delta": open_delta_str,
                     "delta_text": "vs last month",
-                    "is_positive": True
+                    "is_positive": open_delta >= 0
                 },
                 "avg_click_rate": {
                     "value": f"{verification.avg_click_rate}%",
-                    "delta": "+0.5%",
+                    "delta": click_delta_str,
                     "delta_text": "vs last month",
-                    "is_positive": True
+                    "is_positive": click_delta >= 0
                 },
                 "list_health_score": {
                     "value": f"{verification.list_health_score}/100",
-                    "delta": "+3",
+                    "delta": "+0",
                     "delta_text": "points improvement",
                     "is_positive": True
                 },
@@ -1599,20 +1644,7 @@ class SubscriberAnalyticsView(APIView):
             },
             "campaign_analytics": CampaignAnalyticSerializer(campaigns, many=True).data,
             "link_level_ctr": link_level_ctr,
-            "historical_trends": [
-                {"month": "Jan", "open_rate": 0.0, "click_rate": 0.0, "subscriber_growth": 0},
-                {"month": "Feb", "open_rate": 0.0, "click_rate": 0.0, "subscriber_growth": 0},
-                {"month": "Mar", "open_rate": 0.0, "click_rate": 0.0, "subscriber_growth": 0},
-                {"month": "Apr", "open_rate": 0.0, "click_rate": 0.0, "subscriber_growth": 0},
-                {"month": "May", "open_rate": 0.0, "click_rate": 0.0, "subscriber_growth": 0},
-                {"month": "Jun", "open_rate": 0.0, "click_rate": 0.0, "subscriber_growth": 0},
-                {"month": "Jul", "open_rate": 0.0, "click_rate": 0.0, "subscriber_growth": 0},
-                {"month": "Aug", "open_rate": 0.0, "click_rate": 0.0, "subscriber_growth": 0},
-                {"month": "Sep", "open_rate": 0.0, "click_rate": 0.0, "subscriber_growth": 0},
-                {"month": "Oct", "open_rate": 0.0, "click_rate": 0.0, "subscriber_growth": 0},
-                {"month": "Nov", "open_rate": 0.0, "click_rate": 0.0, "subscriber_growth": 0},
-                {"month": "Dec", "open_rate": 0.0, "click_rate": 0.0, "subscriber_growth": 0}
-            ]
+            "historical_trends": historical_trends
         })
 
 
