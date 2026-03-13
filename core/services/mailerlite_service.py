@@ -37,9 +37,11 @@ def get_subscriber_counts_by_status(api_key: str = None) -> dict:
         api_key = getattr(settings, 'MAILERLITE_API_KEY', None)
     
     if not api_key:
+        logger.warning("No API key provided for get_subscriber_counts_by_status")
         return {}
 
     is_new_api = api_key.startswith("mlsn.")
+    logger.info(f"API key format check: is_new_api={is_new_api}, key starts with: {api_key[:10]}...")
     
     # Status mapping: internal name -> MailerLite status name
     statuses = ['active', 'unsubscribed', 'unconfirmed', 'bounced', 'junk']
@@ -55,24 +57,27 @@ def get_subscriber_counts_by_status(api_key: str = None) -> dict:
             }
             
             for status in statuses:
+                # Use limit=0 as suggested - we only need the count from meta
                 response = requests.get(
                     url, 
                     headers=headers, 
-                    params={"limit": 1, "filter[status]": status}, 
+                    params={"limit": 0, "filter[status]": status}, 
                     timeout=10
                 )
                 if response.status_code == 200:
                     data = response.json()
-                    counts[status] = data.get('meta', {}).get('total', 0)
+                    count = data.get('meta', {}).get('total', 0)
+                    counts[status] = count
+                    logger.info(f"Status '{status}': {count} subscribers")
                 else:
-                    logger.warning(f"Failed to fetch {status} count: {response.status_code}")
+                    logger.warning(f"Failed to fetch {status} count: {response.status_code} - {response.text[:200]}")
                     counts[status] = 0
                     
-            logger.info(f"MailerLite status counts: {counts}")
+            logger.info(f"MailerLite status counts fetched successfully: {counts}")
             return counts
         else:
             # Classic API doesn't support status filtering in the same way
-            # Return empty dict to signal it's not supported
+            logger.warning("Classic API detected - status breakdown not supported")
             return {}
             
     except Exception as e:
@@ -208,14 +213,21 @@ def sync_subscriber_analytics(user):
                 )
 
         # 3. Fetch Subscriber Status Breakdown
+        logger.info(f"Fetching status counts for user {user.username}, api_key present: {bool(api_key)}, is_connected: {verification.is_connected_mailerlite}")
         status_counts = get_subscriber_counts_by_status(api_key)
+        logger.info(f"Status counts result: {status_counts}")
         if status_counts:
             verification.active_subscribers = status_counts.get('active', 0)
             verification.unsubscribed_subscribers = status_counts.get('unsubscribed', 0)
             verification.unconfirmed_subscribers = status_counts.get('unconfirmed', 0)
             verification.bounced_subscribers = status_counts.get('bounced', 0)
             verification.junk_subscribers = status_counts.get('junk', 0)
-            logger.info(f"Updated subscriber status counts for user {user.username}: {status_counts}")
+            # Also update audience_size to match active count from breakdown
+            if status_counts.get('active', 0) > 0:
+                verification.audience_size = status_counts.get('active', 0)
+            logger.info(f"Updated subscriber status counts for user {user.username}: active={verification.active_subscribers}, unconfirmed={verification.unconfirmed_subscribers}, unsubscribed={verification.unsubscribed_subscribers}")
+        else:
+            logger.warning(f"No status counts returned for user {user.username} - API key format may be incorrect (should start with 'mlsn.') or connection issue")
 
         # 4. Overall Stats
         # MailerLite new API might have different stats endpoint, fallback to basic calculation if needed
