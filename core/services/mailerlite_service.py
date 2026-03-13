@@ -90,40 +90,89 @@ def get_subscriber_counts_by_status(api_key: str = None) -> dict:
                     "X-MailerLite-ApiKey": api_key
                 }
                 
-                # For Classic API, we need to fetch counts differently
-                # The /subscribers endpoint returns paginated list, we'll use limit=1 and get total from headers or count
-                response = requests.get(url, headers=headers, params={"limit": 1, "offset": 0}, timeout=10)
+                # For Classic API, we need to fetch with a high limit to get total
+                # Try with limit=0 first to see if we get meta data, otherwise use high limit
+                response = requests.get(url, headers=headers, params={"limit": 0}, timeout=10)
                 if response.status_code == 200:
                     data = response.json()
-                    # Classic API returns array directly, not wrapped in 'data'
-                    # Get total count from X-Total-Count header if available
-                    total_count = response.headers.get('X-Total-Count')
-                    if total_count:
-                        counts['active'] = int(total_count)
+                    # Check if response has meta/total
+                    if isinstance(data, dict) and 'meta' in data:
+                        counts['active'] = data.get('meta', {}).get('total', 0)
+                        logger.info(f"[DIAGNOSTIC] Classic API v2 meta total: {counts['active']}")
                     else:
-                        # Fallback: try to get count from response length (but this is just first page)
-                        counts['active'] = len(data) if isinstance(data, list) else 0
-                    
-                    logger.info(f"[DIAGNOSTIC] Classic API active subscribers: {counts['active']}")
-                    
-                    # For other statuses in Classic API, we'd need separate calls or estimates
-                    # Try stats endpoint for additional context
-                    stats_resp = requests.get("https://api.mailerlite.com/api/v2/stats", headers=headers, timeout=10)
-                    if stats_resp.status_code == 200:
-                        stats_data = stats_resp.json()
-                        counts['unsubscribed'] = stats_data.get('unsubscribed', 0)
-                        counts['unconfirmed'] = stats_data.get('unconfirmed', 0)
-                        counts['bounced'] = stats_data.get('bounced', 0)
-                        counts['junk'] = stats_data.get('junk', 0) or 0
-                        logger.info(f"[DIAGNOSTIC] Classic API stats: {stats_data}")
-                    
-                    logger.info(f"[DIAGNOSTIC] Classic API final counts: {counts}")
-                    return counts
+                        # Classic API returns array, try to get total count via count parameter workaround
+                        # Fetch stats for active count
+                        counts['active'] = 0  # Will update from stats
+                        logger.info(f"[DIAGNOSTIC] Classic API limit=0 response type: {type(data)}, keys: {data.keys() if isinstance(data, dict) else 'N/A'}")
                 else:
-                    logger.error(f"[DIAGNOSTIC] Classic API subscribers failed: HTTP {response.status_code} - {response.text[:300]}")
-                    return {}
+                    logger.warning(f"[DIAGNOSTIC] Classic API limit=0 failed: {response.status_code}")
+                
+                # Use stats endpoint for all main counts
+                stats_resp = requests.get("https://api.mailerlite.com/api/v2/stats", headers=headers, timeout=10)
+                if stats_resp.status_code == 200:
+                    stats_data = stats_resp.json()
+                    logger.info(f"[DIAGNOSTIC] Classic API raw stats FULL: {stats_data}")
+                    
+                    # Log all available keys to find the right one
+                    if isinstance(stats_data, dict):
+                        logger.info(f"[DIAGNOSTIC] Available stats keys: {list(stats_data.keys())}")
+                    
+                    # Try multiple possible field names for active subscribers
+                    possible_active_fields = ['subscribed', 'active', 'total', 'total_subscribers', 'subscribers', 'active_subscribers', 'total_active']
+                    for field in possible_active_fields:
+                        if field in stats_data and stats_data[field]:
+                            logger.info(f"[DIAGNOSTIC] Found active count in field '{field}': {stats_data[field]}")
+                            counts['active'] = stats_data[field]
+                            break
+                    
+                    # If still 0, try to calculate from other fields
+                    if counts['active'] == 0 and isinstance(stats_data, dict):
+                        # Sometimes total = active + unsubscribed + bounced + unconfirmed
+                        total = stats_data.get('total', 0)
+                        if total > 0:
+                            unsub = stats_data.get('unsubscribed', 0) or stats_data.get('unsubscribe', 0) or 0
+                            bounced = stats_data.get('bounced', 0) or stats_data.get('bounce', 0) or 0
+                            unconfirmed = stats_data.get('unconfirmed', 0) or stats_data.get('unconfirm', 0) or 0
+                            counts['active'] = total - unsub - bounced - unconfirmed
+                            logger.info(f"[DIAGNOSTIC] Calculated active from total: {counts['active']} = {total} - {unsub} - {bounced} - {unconfirmed}")
+                    
+                    counts['unsubscribed'] = stats_data.get('unsubscribed', 0) or stats_data.get('unsubscribe', 0) or 0
+                    counts['unconfirmed'] = stats_data.get('unconfirmed', 0) or stats_data.get('unconfirm', 0) or 0
+                    counts['bounced'] = stats_data.get('bounced', 0) or stats_data.get('bounce', 0) or 0
+                    counts['junk'] = stats_data.get('junk', 0) or stats_data.get('spam', 0) or 0
+                    
+                    logger.info(f"[DIAGNOSTIC] Classic API stats parsed: active={counts['active']}, unsubscribed={counts['unsubscribed']}")
+                else:
+                    logger.error(f"[DIAGNOSTIC] Classic API stats failed: HTTP {stats_resp.status_code} - {stats_resp.text[:500]}")
+                
+                # If still no active count, try fetching subscribers with high limit
+                if counts['active'] == 0:
+                    logger.info(f"[DIAGNOSTIC] Trying high limit fetch for Classic API...")
+                    # Try with type=active filter
+                    high_limit_resp = requests.get(url, headers=headers, params={"limit": 10000, "type": "active"}, timeout=15)
+                    if high_limit_resp.status_code == 200:
+                        data = high_limit_resp.json()
+                        logger.info(f"[DIAGNOSTIC] High limit response type: {type(data)}")
+                        if isinstance(data, list):
+                            counts['active'] = len(data)
+                            logger.info(f"[DIAGNOSTIC] Classic API high limit count (list): {counts['active']}")
+                        elif isinstance(data, dict):
+                            if 'data' in data:
+                                counts['active'] = len(data['data'])
+                                logger.info(f"[DIAGNOSTIC] Classic API high limit count (data key): {counts['active']}")
+                            if 'meta' in data and 'total' in data['meta']:
+                                counts['active'] = data['meta']['total']
+                                logger.info(f"[DIAGNOSTIC] Classic API high limit count (meta.total): {counts['active']}")
+                    else:
+                        logger.error(f"[DIAGNOSTIC] High limit fetch failed: HTTP {high_limit_resp.status_code}")
+                
+                logger.info(f"[DIAGNOSTIC] Classic API final counts: {counts}")
+                return counts if counts.get('active', 0) > 0 or counts.get('unsubscribed', 0) > 0 else {}
+                
             except Exception as classic_e:
                 logger.error(f"[DIAGNOSTIC] Classic API exception: {classic_e}")
+                import traceback
+                logger.error(f"[DIAGNOSTIC] Traceback: {traceback.format_exc()}")
                 return {}
             
     except Exception as e:
