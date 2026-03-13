@@ -88,14 +88,39 @@ def get_subscriber_counts_by_status(api_key: str = None) -> dict:
             
             # Add a 'dashboard_total' fetch - usually matches Active + Unconfirmed
             try:
-                # Try fetching without status filter to see what the base total is
+                # 1. Try fetching without status filter to see what the base total is
                 base_resp = requests.get(url, headers=headers, params={"limit": 1}, timeout=10)
                 if base_resp.status_code == 200:
                     base_total = base_resp.json().get('meta', {}).get('total', 0)
                     counts['dashboard_total'] = base_total
                     logger.info(f"[DIAGNOSTIC] Base subscribers total: {base_total}")
-            except Exception:
-                pass
+                
+                # 2. Try Groups endpoint - often reflects the 'Big Number' on dashboard
+                groups_resp = requests.get(f"{API_URL}/groups", headers=headers, params={"limit": 50}, timeout=10)
+                if groups_resp.status_code == 200:
+                    groups_data = groups_resp.json().get('data', [])
+                    # Sum count across all groups (usually one main group has the most)
+                    # Note: Subscribers can be in multiple groups, so this might overcount 
+                    # but we can take the max() if prefered.
+                    if groups_data:
+                        # In many cases, authors have one main list.
+                        max_group_count = max(g.get('subscribers_count', 0) for g in groups_data)
+                        counts['max_group_total'] = max_group_count
+                        logger.info(f"[DIAGNOSTIC] Max group subscribers: {max_group_count}")
+            except Exception as e:
+                logger.error(f"[DIAGNOSTIC] Fallback totals failed: {e}")
+            
+            # DERIVE Unconfirmed if it's 0 but total is high
+            best_total = max(counts.get('dashboard_total', 0), counts.get('max_group_total', 0))
+            if counts.get('unconfirmed', 0) == 0 and best_total > counts.get('active', 0):
+                # If we have a high total but 0 unconfirmed, the difference is likely unconfirmed
+                derived_unconfirmed = best_total - counts.get('active', 0)
+                counts['unconfirmed'] = derived_unconfirmed
+                counts['is_derived'] = True
+                logger.info(f"[DIAGNOSTIC] Derived unconfirmed={derived_unconfirmed} from total={best_total}")
+            
+            if best_total > counts.get('dashboard_total', 0):
+                counts['dashboard_total'] = best_total
 
             logger.info(f"[DIAGNOSTIC] MailerLite status counts fetched: {counts}")
             return counts  # Return counts even if 0
@@ -370,7 +395,7 @@ def sync_subscriber_analytics(user):
                 user=user,
                 month=current_month_name,
                 year=current_date.year,
-                defaults={'count': verification.active_subscribers}
+                defaults={'count': verification.audience_size}
             )
             
             # Update average rates from latest campaigns
