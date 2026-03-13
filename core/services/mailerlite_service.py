@@ -80,30 +80,50 @@ def get_subscriber_counts_by_status(api_key: str = None) -> dict:
             logger.info(f"[DIAGNOSTIC] MailerLite status counts fetched: {counts}")
             return counts
         else:
-            # Classic API - use the stats endpoint which provides basic counts
-            logger.warning(f"[DIAGNOSTIC] Classic API detected (key doesn't start with 'mlsn.'). Using fallback stats endpoint. Key prefix: {api_key[:10]}...")
+            # Classic API - use the V2 subscribers endpoint with count
+            logger.warning(f"[DIAGNOSTIC] Classic API detected (key doesn't start with 'mlsn.'). Using V2 subscribers endpoint. Key prefix: {api_key[:10]}...")
             try:
-                url = "https://api.mailerlite.com/api/v2/stats"
+                # Classic API uses different base URL and header
+                url = "https://api.mailerlite.com/api/v2/subscribers"
                 headers = {
                     "Content-Type": "application/json",
                     "X-MailerLite-ApiKey": api_key
                 }
-                response = requests.get(url, headers=headers, timeout=10)
+                
+                # For Classic API, we need to fetch counts differently
+                # The /subscribers endpoint returns paginated list, we'll use limit=1 and get total from headers or count
+                response = requests.get(url, headers=headers, params={"limit": 1, "offset": 0}, timeout=10)
                 if response.status_code == 200:
                     data = response.json()
-                    # Classic stats returns various counts
-                    counts['active'] = data.get('subscribed', 0)
-                    counts['unsubscribed'] = data.get('unsubscribed', 0)
-                    counts['unconfirmed'] = data.get('unconfirmed', 0)  # May not exist in classic
-                    counts['bounced'] = data.get('bounced', 0)  # May not exist in classic
-                    counts['junk'] = 0  # Not available in classic API
-                    logger.info(f"[DIAGNOSTIC] Classic API stats fetched: {counts}")
+                    # Classic API returns array directly, not wrapped in 'data'
+                    # Get total count from X-Total-Count header if available
+                    total_count = response.headers.get('X-Total-Count')
+                    if total_count:
+                        counts['active'] = int(total_count)
+                    else:
+                        # Fallback: try to get count from response length (but this is just first page)
+                        counts['active'] = len(data) if isinstance(data, list) else 0
+                    
+                    logger.info(f"[DIAGNOSTIC] Classic API active subscribers: {counts['active']}")
+                    
+                    # For other statuses in Classic API, we'd need separate calls or estimates
+                    # Try stats endpoint for additional context
+                    stats_resp = requests.get("https://api.mailerlite.com/api/v2/stats", headers=headers, timeout=10)
+                    if stats_resp.status_code == 200:
+                        stats_data = stats_resp.json()
+                        counts['unsubscribed'] = stats_data.get('unsubscribed', 0)
+                        counts['unconfirmed'] = stats_data.get('unconfirmed', 0)
+                        counts['bounced'] = stats_data.get('bounced', 0)
+                        counts['junk'] = stats_data.get('junk', 0) or 0
+                        logger.info(f"[DIAGNOSTIC] Classic API stats: {stats_data}")
+                    
+                    logger.info(f"[DIAGNOSTIC] Classic API final counts: {counts}")
                     return counts
                 else:
-                    logger.error(f"[DIAGNOSTIC] Classic API stats failed: HTTP {response.status_code} - {response.text[:300]}")
+                    logger.error(f"[DIAGNOSTIC] Classic API subscribers failed: HTTP {response.status_code} - {response.text[:300]}")
                     return {}
             except Exception as classic_e:
-                logger.error(f"[DIAGNOSTIC] Classic API stats exception: {classic_e}")
+                logger.error(f"[DIAGNOSTIC] Classic API exception: {classic_e}")
                 return {}
             
     except Exception as e:
