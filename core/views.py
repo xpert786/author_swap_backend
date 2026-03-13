@@ -1437,40 +1437,10 @@ class SubscriberAnalyticsView(APIView):
         verification = SubscriberVerification.objects.get(user=request.user)
         print(f"[DEBUG] Before sync - active_subscribers: {verification.active_subscribers}, audience_size: {verification.audience_size}")
         
-        # Trigger real-time sync
+        # Trigger real-time sync (this calls get_subscriber_counts_by_status and updates the model)
         verification = sync_subscriber_analytics(request.user)
         
         print(f"[DEBUG] After sync - active_subscribers: {verification.active_subscribers}, audience_size: {verification.audience_size}")
-        
-        # After sync, get fresh status counts directly from MailerLite API
-        # This ensures we have the most up-to-date data matching the dashboard
-        from django.conf import settings
-        api_key = getattr(verification, 'mailerlite_api_key', None)
-        if not api_key:
-            api_key = getattr(settings, 'MAILERLITE_API_KEY', None)
-            print(f"[SYNC] Using API key from settings")
-        else:
-            print(f"[SYNC] Using API key from user verification")
-            
-        if api_key and verification.is_connected_mailerlite:
-            try:
-                status_counts = get_subscriber_counts_by_status(api_key)
-                if status_counts and status_counts.get('active', 0) > 0:
-                    # Update verification with latest counts
-                    verification.active_subscribers = status_counts.get('active', 0)
-                    verification.unsubscribed_subscribers = status_counts.get('unsubscribed', 0)
-                    verification.unconfirmed_subscribers = status_counts.get('unconfirmed', 0)
-                    verification.bounced_subscribers = status_counts.get('bounced', 0)
-                    verification.junk_subscribers = status_counts.get('junk', 0)
-                    # Also update audience_size to match the active count from MailerLite
-                    verification.audience_size = status_counts.get('active', 0)
-                    verification.save()
-                    print(f"[SYNC] Updated active_subscribers to {verification.active_subscribers}")
-                else:
-                    print(f"[SYNC] No valid status counts returned, keeping existing values")
-            except Exception as e:
-                print(f"[SYNC ERROR] Failed to fetch fresh counts: {e}")
-                print(f"[SYNC] Keeping existing database values")
         
         # After sync, ensure we have the latest data
         verification.refresh_from_db()

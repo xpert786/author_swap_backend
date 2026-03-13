@@ -58,18 +58,25 @@ def get_subscriber_counts_by_status(api_key: str = None) -> dict:
             }
             
             for status in statuses:
-                # Use limit=0 as suggested - we only need the count from meta
+                # Use limit=1 - some API versions/proxies may behave better than limit=0
                 try:
                     response = requests.get(
                         url, 
                         headers=headers, 
-                        params={"limit": 0, "filter[status]": status}, 
+                        params={"limit": 1, "filter[status]": status}, 
                         timeout=10
                     )
                     if response.status_code == 200:
                         data = response.json()
                         logger.info(f"[DIAGNOSTIC] Raw response for {status}: {data}")
                         count = data.get('meta', {}).get('total', 0)
+                        
+                        # Fallback: if meta.total is missing but we got data, check length
+                        if count == 0 and 'data' in data and len(data['data']) > 0:
+                            count = len(data['data'])
+                            # If it's 1 and we used limit=1, it might be more. 
+                            # But usually meta.total is present.
+                            
                         counts[status] = count
                         logger.info(f"[DIAGNOSTIC] Status '{status}': {count} subscribers")
                     else:
@@ -151,20 +158,23 @@ def get_subscriber_counts_by_status(api_key: str = None) -> dict:
                 if counts['active'] == 0:
                     logger.info(f"[DIAGNOSTIC] Trying high limit fetch for Classic API...")
                     # Try with type=active filter
-                    high_limit_resp = requests.get(url, headers=headers, params={"limit": 10000, "type": "active"}, timeout=15)
+                    high_limit_resp = requests.get(url, headers=headers, params={"limit": 5000, "type": "active"}, timeout=15)
                     if high_limit_resp.status_code == 200:
                         data = high_limit_resp.json()
-                        logger.info(f"[DIAGNOSTIC] High limit response type: {type(data)}")
-                        if isinstance(data, list):
+                        # X-Total-Count header is usually the best source for Classic API
+                        total_header = high_limit_resp.headers.get('X-Total-Count')
+                        if total_header:
+                            counts['active'] = int(total_header)
+                            logger.info(f"[DIAGNOSTIC] Classic API active count (X-Total-Count): {counts['active']}")
+                        elif isinstance(data, list):
                             counts['active'] = len(data)
                             logger.info(f"[DIAGNOSTIC] Classic API high limit count (list): {counts['active']}")
                         elif isinstance(data, dict):
                             if 'data' in data:
                                 counts['active'] = len(data['data'])
-                                logger.info(f"[DIAGNOSTIC] Classic API high limit count (data key): {counts['active']}")
                             if 'meta' in data and 'total' in data['meta']:
                                 counts['active'] = data['meta']['total']
-                                logger.info(f"[DIAGNOSTIC] Classic API high limit count (meta.total): {counts['active']}")
+                            logger.info(f"[DIAGNOSTIC] Classic API high limit count (dict): {counts['active']}")
                     else:
                         logger.error(f"[DIAGNOSTIC] High limit fetch failed: HTTP {high_limit_resp.status_code}")
                 
