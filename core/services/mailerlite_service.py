@@ -197,29 +197,35 @@ def get_subscriber_counts_by_status(api_key: str = None) -> dict:
                     counts['junk'] = stats_data.get('junk', 0) or stats_data.get('spam', 0) or 0
                     
                     logger.info(f"[DIAGNOSTIC] Classic API stats parsed: active={counts['active']}, unsubscribed={counts['unsubscribed']}, unconfirmed={counts['unconfirmed']}")
-                    # Use 'total' from stats as the dashboard_total for Classic
-                    counts['dashboard_total'] = stats_data.get('total', 0)
+                    # Use 'subscribed' + 'unconfirmed' for dashboard_total if stats provide them
+                    # Sometimes 'total' in stats is EVERYTHING (including bounced/unsub), so we prefer sum of specific statuses for "Dashboard Total"
+                    counts['dashboard_total'] = stats_data.get('subscribed', 0) + (stats_data.get('unconfirmed', 0) or 0)
                 else:
                     logger.error(f"[DIAGNOSTIC] Classic API stats failed: HTTP {stats_resp.status_code} - {stats_resp.text[:500]}")
                 
-                # Fetch Groups for Classic to find the "Big Number"
+                # Fetch Groups for Classic to find the "Big Number" (e.g. 7,240)
                 try:
+                    # In V2, groups often contain the most accurate 'active + unconfirmed' count as seen on dashboard
                     groups_resp = requests.get("https://api.mailerlite.com/api/v2/groups", headers=headers, timeout=10)
                     if groups_resp.status_code == 200:
                         groups_data = groups_resp.json()
                         if isinstance(groups_data, list) and groups_data:
-                            max_group_count = max(g.get('subscribers_count', 0) for g in groups_data)
-                            counts['max_group_total'] = max_group_count
-                            logger.info(f"[DIAGNOSTIC] Classic API Max group subscribers: {max_group_count}")
-                except Exception:
-                    pass
+                            # We check both 'total' and 'subscribers_count'
+                            max_total = max(max(g.get('total', 0), g.get('subscribers_count', 0)) for g in groups_data)
+                            counts['max_group_total'] = max_total
+                            logger.info(f"[DIAGNOSTIC] Classic API Max group subscribers: {max_total}")
+                except Exception as group_e:
+                    logger.warning(f"[DIAGNOSTIC] Classic groups fetch failed: {group_e}")
 
                 # Derive Unconfirmed for Classic if needed
+                # If dashboard says 7240 but active is 5571, the diff (1669) must be unconfirmed
                 best_total = max(counts.get('dashboard_total', 0), counts.get('max_group_total', 0))
-                if (counts.get('unconfirmed', 0) == 0 or counts.get('unconfirmed') is None) and best_total > counts.get('active', 0):
+                if best_total > counts.get('active', 0):
                     derived = best_total - counts.get('active', 0)
-                    counts['unconfirmed'] = derived
-                    logger.info(f"[DIAGNOSTIC] Classic Derived unconfirmed={derived} from total={best_total}")
+                    # Only override if the current unconfirmed is less than the gap
+                    if counts.get('unconfirmed', 0) < derived:
+                        counts['unconfirmed'] = derived
+                        logger.info(f"[DIAGNOSTIC] Classic Derived unconfirmed={derived} from total={best_total}")
                 
                 if best_total > counts.get('dashboard_total', 0):
                     counts['dashboard_total'] = best_total
@@ -464,16 +470,22 @@ def sync_subscriber_analytics(user):
                 # Health Score calculation
                 health_score = int(min(100, (verification.avg_open_rate + (verification.avg_click_rate * 3))))
                 verification.list_health_score = health_score
+            
+            # --- Move Health Metrics outside of campaigns check so they always update ---
+            total_active_pool = verification.active_subscribers + verification.unconfirmed_subscribers
+            # Bounce/Unsub rates should be calculated against the total historical list including valid but inactive status
+            total_historical = total_active_pool + verification.unsubscribed_subscribers + verification.bounced_subscribers
+            
+            if total_historical > 0:
+                verification.bounce_rate = round((verification.bounced_subscribers / total_historical) * 100, 1)
+                verification.unsubscribe_rate = round((verification.unsubscribed_subscribers / total_historical) * 100, 1)
+                # Active rate: % of total list that is currently Active (confirmed)
+                verification.active_rate = round((verification.active_subscribers / total_historical) * 100, 1)
                 
-                # Metrics
-                total_subs = verification.active_subscribers + verification.unsubscribed_subscribers + verification.bounced_subscribers
-                if total_subs > 0:
-                    verification.bounce_rate = round((verification.bounced_subscribers / total_subs) * 100, 1)
-                    verification.unsubscribe_rate = round((verification.unsubscribed_subscribers / total_subs) * 100, 1)
-                    verification.active_rate = round((verification.active_subscribers / total_subs) * 100, 1)
-                verification.avg_engagement = round(verification.avg_open_rate / 10, 1)
+            # Engagement metric based on open rates if available, else 0
+            verification.avg_engagement = round(verification.avg_open_rate / 10, 1) if verification.avg_open_rate > 0 else 0.0
 
-            logger.info(f"Updated subscriber status counts for user {user.username}: active={verification.active_subscribers}")
+            logger.info(f"Updated subscriber status counts for user {user.username}: active={verification.active_subscribers}, total={verification.audience_size}")
         else:
             logger.warning(f"No valid status counts returned for user {user.username} - keeping existing values")
             # Don't override existing values if API call fails
