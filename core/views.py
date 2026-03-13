@@ -1427,10 +1427,30 @@ class SubscriberAnalyticsView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        from core.services.mailerlite_service import sync_subscriber_analytics
+        from core.services.mailerlite_service import sync_subscriber_analytics, get_subscriber_counts_by_status
         
         # Trigger real-time sync
         verification = sync_subscriber_analytics(request.user)
+        
+        # After sync, get fresh status counts directly from MailerLite API
+        # This ensures we have the most up-to-date data matching the dashboard
+        api_key = getattr(verification, 'mailerlite_api_key', None)
+        if api_key and verification.is_connected_mailerlite:
+            try:
+                status_counts = get_subscriber_counts_by_status(api_key)
+                if status_counts and status_counts.get('active', 0) > 0:
+                    # Update verification with latest counts
+                    verification.active_subscribers = status_counts.get('active', 0)
+                    verification.unsubscribed_subscribers = status_counts.get('unsubscribed', 0)
+                    verification.unconfirmed_subscribers = status_counts.get('unconfirmed', 0)
+                    verification.bounced_subscribers = status_counts.get('bounced', 0)
+                    verification.junk_subscribers = status_counts.get('junk', 0)
+                    # Also update audience_size to match the active count from MailerLite
+                    verification.audience_size = status_counts.get('active', 0)
+                    verification.save()
+                    print(f"[SYNC] Updated active_subscribers to {verification.active_subscribers}")
+            except Exception as e:
+                print(f"[SYNC ERROR] Failed to fetch fresh counts: {e}")
         
         growth_data = SubscriberGrowth.objects.filter(user=request.user)
         campaigns = CampaignAnalytic.objects.filter(user=request.user)
@@ -1510,7 +1530,7 @@ class SubscriberAnalyticsView(APIView):
             },
             "summary_stats": {
                 "active_subscribers": {
-                    "value": verification.audience_size,
+                    "value": verification.active_subscribers,
                     "delta": "+312",
                     "delta_text": "this month",
                     "is_positive": True
