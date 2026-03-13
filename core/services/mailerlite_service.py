@@ -11,16 +11,26 @@ API_URL = "https://connect.mailerlite.com/api"
 
 def _get_headers(api_key=None):
     """
-    Returns headers with Bearer token for MailerLite API.
+    Returns headers and API version info.
     """
     if not api_key:
         api_key = getattr(settings, 'MAILERLITE_API_KEY', None)
     
-    return {
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        "Authorization": f"Bearer {api_key}"
-    }
+    if not api_key:
+        return {}, False
+        
+    is_new = api_key.startswith("mlsn.")
+    if is_new:
+        return {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "Authorization": f"Bearer {api_key}"
+        }, True
+    else:
+        return {
+            "Content-Type": "application/json",
+            "X-MailerLite-ApiKey": api_key
+        }, False
 
 
 # ---------------------------------------------------------------------------
@@ -186,9 +196,33 @@ def get_subscriber_counts_by_status(api_key: str = None) -> dict:
                     counts['bounced'] = stats_data.get('bounced', 0) or stats_data.get('bounce', 0) or 0
                     counts['junk'] = stats_data.get('junk', 0) or stats_data.get('spam', 0) or 0
                     
-                    logger.info(f"[DIAGNOSTIC] Classic API stats parsed: active={counts['active']}, unsubscribed={counts['unsubscribed']}")
+                    logger.info(f"[DIAGNOSTIC] Classic API stats parsed: active={counts['active']}, unsubscribed={counts['unsubscribed']}, unconfirmed={counts['unconfirmed']}")
+                    # Use 'total' from stats as the dashboard_total for Classic
+                    counts['dashboard_total'] = stats_data.get('total', 0)
                 else:
                     logger.error(f"[DIAGNOSTIC] Classic API stats failed: HTTP {stats_resp.status_code} - {stats_resp.text[:500]}")
+                
+                # Fetch Groups for Classic to find the "Big Number"
+                try:
+                    groups_resp = requests.get("https://api.mailerlite.com/api/v2/groups", headers=headers, timeout=10)
+                    if groups_resp.status_code == 200:
+                        groups_data = groups_resp.json()
+                        if isinstance(groups_data, list) and groups_data:
+                            max_group_count = max(g.get('subscribers_count', 0) for g in groups_data)
+                            counts['max_group_total'] = max_group_count
+                            logger.info(f"[DIAGNOSTIC] Classic API Max group subscribers: {max_group_count}")
+                except Exception:
+                    pass
+
+                # Derive Unconfirmed for Classic if needed
+                best_total = max(counts.get('dashboard_total', 0), counts.get('max_group_total', 0))
+                if (counts.get('unconfirmed', 0) == 0 or counts.get('unconfirmed') is None) and best_total > counts.get('active', 0):
+                    derived = best_total - counts.get('active', 0)
+                    counts['unconfirmed'] = derived
+                    logger.info(f"[DIAGNOSTIC] Classic Derived unconfirmed={derived} from total={best_total}")
+                
+                if best_total > counts.get('dashboard_total', 0):
+                    counts['dashboard_total'] = best_total
                 
                 # If still no active count, try fetching subscribers with high limit
                 if counts['active'] == 0:
@@ -333,8 +367,8 @@ def sync_subscriber_analytics(user):
     else:
         logger.info(f"[DIAGNOSTIC] Using API key from user verification for user {user.username}")
     
-    headers = _get_headers(api_key)
-    if not headers.get("Authorization") or not verification.is_connected_mailerlite:
+    headers, is_new_api = _get_headers(api_key)
+    if not headers or not verification.is_connected_mailerlite:
         # Simulation if no real sync possible
         verification.avg_open_rate = round(max(30, min(60, verification.avg_open_rate + random.uniform(-0.5, 0.5))), 1)
         verification.avg_click_rate = round(max(5, min(15, verification.avg_click_rate + random.uniform(-0.1, 0.1))), 1)
@@ -349,24 +383,44 @@ def sync_subscriber_analytics(user):
             sync_profile_audience(profile, api_key=api_key)
         
         # 2. Fetch Campaigns
-        campaigns_resp = requests.get(f"{API_URL}/campaigns", headers=headers, params={"limit": 5}, timeout=10)
+        campaign_url = f"{API_URL}/campaigns" if is_new_api else "https://api.mailerlite.com/api/v2/campaigns/sent"
+        params = {"limit": 5}
+        
+        campaigns_resp = requests.get(campaign_url, headers=headers, params=params, timeout=10)
         if campaigns_resp.status_code == 200:
-            campaigns = campaigns_resp.json().get('data', [])
+            data = campaigns_resp.json()
+            campaigns = data.get('data', []) if is_new_api else data
+            
             for camp in campaigns:
+                if is_new_api:
+                    name = camp.get('subject') or camp.get('name')
+                    date_val = camp.get('sent_at') or timezone.now().date()
+                    subs = camp.get('total_recipients', 0)
+                    open_r = camp.get('open_rate_percent', 0.0)
+                    click_r = camp.get('click_rate_percent', 0.0)
+                else:
+                    name = camp.get('subject')
+                    date_val = camp.get('date_sent') or timezone.now().date()
+                    # Classic campaigns have 'opened' and 'clicked' as counts, rates are in 'stats'
+                    stats = camp.get('stats', {})
+                    subs = stats.get('sent', 0)
+                    open_r = stats.get('opened_rate', 0.0)
+                    click_r = stats.get('clicked_rate', 0.0)
+
                 CampaignAnalytic.objects.update_or_create(
                     user=user,
-                    name=camp.get('subject') or camp.get('name'),
+                    name=name,
                     defaults={
-                        'date': camp.get('sent_at') or timezone.now().date(),
-                        'subscribers': camp.get('total_recipients', 0),
-                        'open_rate': camp.get('open_rate_percent', 0.0),
-                        'click_rate': camp.get('click_rate_percent', 0.0),
+                        'date': date_val,
+                        'subscribers': subs,
+                        'open_rate': open_r,
+                        'click_rate': click_r,
                         'type': 'Recent'
                     }
                 )
 
         # 3. Fetch Subscriber Status Breakdown
-        logger.info(f"Fetching status counts for user {user.username}, api_key present: {bool(api_key)}, is_connected: {verification.is_connected_mailerlite}")
+        logger.info(f"Fetching status counts for user {user.username}, is_new={is_new_api}")
         status_counts = get_subscriber_counts_by_status(api_key)
         logger.info(f"Status counts result: {status_counts}")
         if status_counts is not None:
