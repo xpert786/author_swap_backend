@@ -1,14 +1,14 @@
 from django.http import HttpResponse, JsonResponse
-from django.views import View
-from django.utils import timezone
+from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
+from django.utils import timezone
 from datetime import datetime, timedelta
 import json
 import urllib.parse
 from core.models import NewsletterSlot
 
 
-class GoogleCalendarExportView(View):
+class GoogleCalendarExportView(APIView):
     """
     Export newsletter slots to Google Calendar
     GET /api/calendar/google/
@@ -70,7 +70,7 @@ class GoogleCalendarExportView(View):
         })
 
 
-class OutlookCalendarExportView(View):
+class OutlookCalendarExportView(APIView):
     """
     Export newsletter slots to Outlook Calendar
     GET /api/calendar/outlook/
@@ -124,7 +124,7 @@ class OutlookCalendarExportView(View):
         })
 
 
-class ICSExportView(View):
+class ICSExportView(APIView):
     """
     Export newsletter slots as ICS file
     GET /api/calendar/ics/
@@ -189,7 +189,7 @@ class ICSExportView(View):
         return '\r\n'.join(ics_lines)
 
 
-class CalendarExportOptionsView(View):
+class CalendarExportOptionsView(APIView):
     """
     Get available calendar export options
     GET /api/calendar/options/
