@@ -1429,8 +1429,15 @@ class SubscriberAnalyticsView(APIView):
     def get(self, request):
         from core.services.mailerlite_service import sync_subscriber_analytics, get_subscriber_counts_by_status
         
+        # DEBUG: Force refresh from database
+        from core.models import SubscriberVerification
+        verification = SubscriberVerification.objects.get(user=request.user)
+        print(f"[DEBUG] Before sync - active_subscribers: {verification.active_subscribers}, audience_size: {verification.audience_size}")
+        
         # Trigger real-time sync
         verification = sync_subscriber_analytics(request.user)
+        
+        print(f"[DEBUG] After sync - active_subscribers: {verification.active_subscribers}, audience_size: {verification.audience_size}")
         
         # After sync, get fresh status counts directly from MailerLite API
         # This ensures we have the most up-to-date data matching the dashboard
@@ -1454,6 +1461,10 @@ class SubscriberAnalyticsView(APIView):
             except Exception as e:
                 print(f"[SYNC ERROR] Failed to fetch fresh counts: {e}")
                 print(f"[SYNC] Keeping existing database values")
+        
+        # Final check - refresh from database
+        verification.refresh_from_db()
+        print(f"[DEBUG] Final - active_subscribers: {verification.active_subscribers}, audience_size: {verification.audience_size}")
         
         growth_data = SubscriberGrowth.objects.filter(user=request.user)
         campaigns = CampaignAnalytic.objects.filter(user=request.user)
