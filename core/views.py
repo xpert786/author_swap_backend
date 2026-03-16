@@ -2446,14 +2446,14 @@ class ComposePartnerListView(APIView):
         from django.contrib.auth import get_user_model
         User = get_user_model()
         
-        users = User.objects.exclude(id=user.id).filter(slots__isnull=False).distinct()
+        users = User.objects.exclude(id=user.id).filter(newsletter_slots__isnull=False).distinct()
         
         # Apply search filter if provided
         if search:
             users = users.filter(
                 Q(username__icontains=search) |
                 Q(profiles__name__icontains=search) |
-                Q(slots__preferred_genre__icontains=search)
+                Q(newsletter_slots__preferred_genre__icontains=search)
             )
         
         # Serialize unique authors with their latest slot info
