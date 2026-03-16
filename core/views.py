@@ -4899,31 +4899,43 @@ class DirectPaymentView(APIView):
     def post(self, request):
         sender = request.user
         receiver_id = request.data.get('receiver_id')
+        swap_id = request.data.get('swap_id')
         amount = request.data.get('amount')
         description = request.data.get('description', '')
         
-        # Validate receiver
-        try:
-            # Try as User ID first, then as Profile ID
-            receiver = None
+        receiver = None
+        swap_request = None
+
+        # 1. Try to resolve via explicit swap_id
+        if swap_id:
             try:
+                swap_request = SwapRequest.objects.get(id=swap_id)
+                receiver = swap_request.slot.user if sender == swap_request.requester else swap_request.requester
+            except SwapRequest.DoesNotExist:
+                return Response({'detail': f'SwapRequest with ID {swap_id} not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        # 2. Try to resolve via receiver_id (User or Profile), with SwapRequest fallback
+        if not receiver and receiver_id:
+            try:
+                # Try User ID
                 receiver = User.objects.get(id=receiver_id)
-            except User.DoesNotExist:
+            except (User.DoesNotExist, ValueError, TypeError):
                 try:
+                    # Try Profile ID
                     profile = Profile.objects.get(id=receiver_id)
                     receiver = profile.user
-                except Profile.DoesNotExist:
-                    pass
-            
-            if not receiver:
-                return Response({
-                    'detail': f'Receiver with ID {receiver_id} not found.'
-                }, status=status.HTTP_404_NOT_FOUND)
-                
-        except (ValueError, TypeError):
+                except (Profile.DoesNotExist, ValueError, TypeError):
+                    # FALLBACK: check if they passed swap_id as receiver_id
+                    try:
+                        swap_request = SwapRequest.objects.get(id=receiver_id)
+                        receiver = swap_request.slot.user if sender == swap_request.requester else swap_request.requester
+                    except (SwapRequest.DoesNotExist, ValueError, TypeError):
+                        pass
+
+        if not receiver:
             return Response({
-                'detail': 'Invalid receiver ID.'
-            }, status=status.HTTP_400_BAD_REQUEST)
+                'detail': f'Receiver not found (checked User, Profile, and Swap ID {receiver_id or swap_id}).'
+            }, status=status.HTTP_404_NOT_FOUND)
         
         # Validate amount
         try:
@@ -4956,7 +4968,8 @@ class DirectPaymentView(APIView):
             receiver=receiver,
             amount=amount,
             transaction_type='direct_payment',
-            description=description
+            description=description,
+            swap_request=swap_request
         )
         
         # Process the payment
