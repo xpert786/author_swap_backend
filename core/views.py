@@ -2503,7 +2503,7 @@ class ComposePartnerListView(APIView):
                     'max_partners': latest_slot.max_partners if latest_slot else 1,
                 },
                 'author': {
-                    'id': profile.id if profile else u.id,
+                    'id': u.id,  # Use user ID, not profile ID, for chat functionality
                     'name': profile.name if profile else u.username,
                     'profile_picture': profile_pic,
                     'swaps_completed': profile.swaps_completed if profile else 0,
