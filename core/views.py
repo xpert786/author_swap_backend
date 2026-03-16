@@ -2431,37 +2431,64 @@ class ConversationListView(APIView):
         return Response(conversations)
 
 class ComposePartnerListView(APIView):
+    """
+    GET /api/chat/compose/
+    Returns list of all users available for chat (authors with profiles).
+    Excludes the current user. Supports search by name or username.
+    """
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         user = request.user
+        search = request.query_params.get('search', '').strip()
         
-        # 1. Get all swap partners (eligible to chat)
-        swap_requests = SwapRequest.objects.filter(
-            (Q(requester=user) | Q(slot__user=user))
-        ).exclude(status='rejected')
+        # Get all users with profiles (exclude current user)
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
         
-        eligible_user_ids = set()
-        for sr in swap_requests:
-            if sr.requester == user:
-                eligible_user_ids.add(sr.slot.user_id)
-            else:
-                eligible_user_ids.add(sr.requester_id)
+        users = User.objects.exclude(id=user.id).filter(profiles__isnull=False).distinct()
         
-        # 2. Get user IDs who ALREADY have a conversation
-        chatted_user_ids = set(User.objects.filter(
-            Q(sent_messages__recipient=user) | 
-            Q(received_messages__sender=user)
-        ).values_list('id', flat=True).distinct())
+        # Apply search filter if provided
+        if search:
+            users = users.filter(
+                Q(username__icontains=search) |
+                Q(profiles__name__icontains=search)
+            )
         
-        # 3. Filter: eligible minus chatted
-        compose_user_ids = eligible_user_ids - chatted_user_ids
+        # Serialize with profile info
+        result = []
+        for u in users:
+            profile = u.profiles.first()
+            profile_pic = None
+            if profile and profile.profile_picture:
+                profile_pic = request.build_absolute_uri(profile.profile_picture.url)
+            
+            # Check if already chatted
+            has_chat = ChatMessage.objects.filter(
+                Q(sender=user, recipient=u) | Q(sender=u, recipient=user)
+            ).exists()
+            
+            # Check if swap partner
+            is_swap_partner = SwapRequest.objects.filter(
+                (Q(requester=user) & Q(slot__user=u)) |
+                (Q(requester=u) & Q(slot__user=user))
+            ).exclude(status='rejected').exists()
+            
+            result.append({
+                'id': u.id,
+                'user_id': u.id,
+                'username': u.username,
+                'name': profile.name if profile else u.username,
+                'profile_picture': profile_pic,
+                'avatar': profile_pic,
+                'location': profile.location if profile else None,
+                'genre': profile.get_primary_genre_display() if profile and hasattr(profile, 'get_primary_genre_display') else None,
+                'is_swap_partner': is_swap_partner,
+                'has_chat_history': has_chat,
+                'eligible_to_chat': True,
+            })
         
-        compose_users = User.objects.filter(id__in=compose_user_ids)
-        
-        from core.serializers import ConversationPartnerSerializer
-        serializer = ConversationPartnerSerializer(compose_users, many=True, context={'request': request})
-        return Response(serializer.data)
+        return Response(result)
 
 class MySwapPartnersView(APIView):
     permission_classes = [IsAuthenticated]
