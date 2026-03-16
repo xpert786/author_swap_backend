@@ -1,5 +1,7 @@
 from django.db import models
 from django.contrib.auth import get_user_model
+from django.utils import timezone
+from decimal import Decimal
 from authentication.constants import PRIMARY_GENRE_CHOICES
 
 User = get_user_model()
@@ -390,6 +392,125 @@ class SwapPayment(models.Model):
 
     def __str__(self):
         return f"Payment for Swap {self.swap_request.id} - {self.status}"
+
+    def complete_payment(self):
+        """Mark payment as completed and transfer money to receiver's wallet"""
+        if self.status == 'pending':
+            self.status = 'completed'
+            self.paid_at = timezone.now()
+            self.save()
+            
+            # Create a payment transaction and add money to receiver's wallet
+            receiver = self.swap_request.slot.user
+            transaction = PaymentTransaction.objects.create(
+                sender=self.payer,
+                receiver=receiver,
+                amount=self.amount,
+                transaction_type='swap_payment',
+                swap_payment=self,
+                swap_request=self.swap_request,
+                description=f"Payment for swap request #{self.swap_request.id}"
+            )
+            
+            # Complete the transaction (this adds money to receiver's wallet)
+            transaction.complete_transaction()
+            return True
+        return False
+
+    class Meta:
+        ordering = ['-created_at']
+
+
+class UserWallet(models.Model):
+    """
+    Tracks user's wallet balance and payment information.
+    Each user has one wallet that accumulates payments from swap requests.
+    """
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='wallet')
+    balance = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
+    total_earned = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
+    total_withdrawn = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
+    
+    # Stripe Connect account ID for receiving payments
+    stripe_connect_account_id = models.CharField(max_length=100, blank=True, null=True)
+    is_stripe_connected = models.BooleanField(default=False)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.user.username}'s Wallet - ${self.balance}"
+
+    def add_balance(self, amount):
+        """Add amount to wallet balance"""
+        self.balance = Decimal(str(self.balance)) + Decimal(str(amount))
+        self.total_earned = Decimal(str(self.total_earned)) + Decimal(str(amount))
+        self.save()
+
+    def withdraw_balance(self, amount):
+        """Withdraw amount from wallet balance"""
+        if self.balance >= amount:
+            self.balance = Decimal(str(self.balance)) - Decimal(str(amount))
+            self.total_withdrawn = Decimal(str(self.total_withdrawn)) + Decimal(str(amount))
+            self.save()
+            return True
+        return False
+
+
+class PaymentTransaction(models.Model):
+    """
+    Tracks all payment transactions in the system.
+    Records money movement between users and for swap payments.
+    """
+    TRANSACTION_TYPES = [
+        ('swap_payment', 'Swap Payment'),
+        ('direct_payment', 'Direct Payment'),
+        ('withdrawal', 'Withdrawal'),
+        ('refund', 'Refund'),
+        ('bonus', 'Bonus'),
+    ]
+
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('completed', 'Completed'),
+        ('failed', 'Failed'),
+        ('cancelled', 'Cancelled'),
+    ]
+
+    sender = models.ForeignKey(User, on_delete=models.CASCADE, related_name='sent_transactions', null=True, blank=True)
+    receiver = models.ForeignKey(User, on_delete=models.CASCADE, related_name='received_transactions')
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    transaction_type = models.CharField(max_length=20, choices=TRANSACTION_TYPES)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    
+    # Related objects (optional)
+    swap_payment = models.ForeignKey('SwapPayment', on_delete=models.SET_NULL, null=True, blank=True)
+    swap_request = models.ForeignKey('SwapRequest', on_delete=models.SET_NULL, null=True, blank=True)
+    
+    # Stripe references
+    stripe_payment_intent_id = models.CharField(max_length=255, blank=True, null=True)
+    stripe_transfer_id = models.CharField(max_length=255, blank=True, null=True)
+    
+    description = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    def __str__(self):
+        sender_name = self.sender.username if self.sender else "System"
+        return f"{sender_name} -> {self.receiver.username}: ${self.amount}"
+
+    def complete_transaction(self):
+        """Mark transaction as completed and update receiver's wallet"""
+        if self.status == 'pending':
+            self.status = 'completed'
+            self.completed_at = timezone.now()
+            self.save()
+            
+            # Add money to receiver's wallet
+            wallet, created = UserWallet.objects.get_or_create(user=self.receiver)
+            wallet.add_balance(self.amount)
+            return True
+        return False
 
     class Meta:
         ordering = ['-created_at']

@@ -4,7 +4,7 @@ from authentication.models import GENRE_SUBGENRE_MAPPING
 from .models import (
     Book, Profile, Notification, SwapRequest, 
     SubscriptionTier, UserSubscription, SubscriberVerification,
-    SubscriberGrowth, CampaignAnalytic
+    SubscriberGrowth, CampaignAnalytic, UserWallet, PaymentTransaction
 )
 
 from django.utils import timezone
@@ -1440,3 +1440,60 @@ class ConversationListSerializer(serializers.Serializer):
     last_message_time = serializers.DateTimeField()
     formatted_time = serializers.CharField()
     unread_count = serializers.IntegerField()
+
+
+class WalletSerializer(serializers.ModelSerializer):
+    """Serializer for UserWallet model"""
+    user_id = serializers.IntegerField(source='user.id', read_only=True)
+    username = serializers.CharField(source='user.username', read_only=True)
+    
+    class Meta:
+        model = UserWallet
+        fields = [
+            'id', 'user_id', 'username', 'balance', 'total_earned', 'total_withdrawn',
+            'is_stripe_connected', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['user', 'total_earned', 'total_withdrawn']
+
+
+class PaymentTransactionSerializer(serializers.ModelSerializer):
+    """Serializer for PaymentTransaction model"""
+    sender_name = serializers.CharField(source='sender.username', read_only=True)
+    receiver_name = serializers.CharField(source='receiver.username', read_only=True)
+    sender_profile = serializers.SerializerMethodField()
+    receiver_profile = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = PaymentTransaction
+        fields = [
+            'id', 'sender', 'receiver', 'sender_name', 'receiver_name',
+            'sender_profile', 'receiver_profile', 'amount', 'transaction_type',
+            'status', 'description', 'created_at', 'completed_at',
+            'stripe_payment_intent_id', 'stripe_transfer_id'
+        ]
+        read_only_fields = ['sender', 'receiver', 'stripe_payment_intent_id', 'stripe_transfer_id']
+    
+    def get_sender_profile(self, obj):
+        if obj.sender:
+            try:
+                profile = obj.sender.profiles.first()
+                if profile:
+                    return {
+                        'name': profile.name,
+                        'profile_picture': profile.profile_picture.url if profile.profile_picture else None
+                    }
+            except:
+                pass
+        return None
+    
+    def get_receiver_profile(self, obj):
+        try:
+            profile = obj.receiver.profiles.first()
+            if profile:
+                return {
+                    'name': profile.name,
+                    'profile_picture': profile.profile_picture.url if profile.profile_picture else None
+                }
+        except:
+            pass
+        return None

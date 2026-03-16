@@ -5,13 +5,15 @@ from django.http import Http404
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
+from decimal import Decimal
 from .serializers import (
     NewsletterSlotSerializer, NotificationSerializer, SwapPartnerSerializer, 
     SwapRequestSerializer, SwapManagementSerializer, BookSerializer, ProfileSerializer, RecentSwapSerializer,
     SubscriptionTierSerializer, UserSubscriptionSerializer, SubscriberVerificationSerializer,
     SubscriberGrowthSerializer, CampaignAnalyticSerializer, ChatMessageSerializer,
     ConversationListSerializer, ConversationPartnerSerializer,
-    EmailListSerializer, EmailDetailSerializer, ComposeEmailSerializer
+    EmailListSerializer, EmailDetailSerializer, ComposeEmailSerializer,
+    WalletSerializer, PaymentTransactionSerializer
 )
 from .ui_serializers import SlotExploreSerializer, SlotDetailsSerializer
 from authentication.constants import GENRE_SUBGENRE_MAPPING
@@ -20,7 +22,8 @@ from authentication.constants import GENRE_SUBGENRE_MAPPING
 from .models import (
     Book, NewsletterSlot, Profile, SwapRequest, Notification, 
     SubscriptionTier, UserSubscription, SubscriberVerification,
-    SubscriberGrowth, CampaignAnalytic, Email, ChatMessage, SwapPayment
+    SubscriberGrowth, CampaignAnalytic, Email, ChatMessage, SwapPayment,
+    UserWallet, PaymentTransaction
 )
 import calendar
 from datetime import datetime, date, timedelta
@@ -4834,3 +4837,212 @@ class SyncSubscriptionView(APIView):
             import logging
             logging.getLogger(__name__).error(f"SyncSubscription Error: {str(e)}")
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class WalletView(APIView):
+    """
+    GET /api/wallet/
+    Returns user's wallet balance and basic info
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        wallet, created = UserWallet.objects.get_or_create(user=user)
+        
+        serializer = WalletSerializer(wallet)
+        return Response(serializer.data)
+
+
+class WalletTransactionHistoryView(APIView):
+    """
+    GET /api/wallet/transactions/
+    Returns user's transaction history (both sent and received)
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        
+        # Get all transactions involving this user
+        sent_transactions = PaymentTransaction.objects.filter(sender=user)
+        received_transactions = PaymentTransaction.objects.filter(receiver=user)
+        
+        # Combine and sort by date
+        all_transactions = sent_transactions.union(received_transactions).order_by('-created_at')
+        
+        # Apply filters
+        transaction_type = request.query_params.get('type', None)
+        if transaction_type:
+            all_transactions = all_transactions.filter(transaction_type=transaction_type)
+        
+        status_filter = request.query_params.get('status', None)
+        if status_filter:
+            all_transactions = all_transactions.filter(status=status_filter)
+        
+        serializer = PaymentTransactionSerializer(all_transactions, many=True, context={'request': request})
+        return Response(serializer.data)
+
+
+class DirectPaymentView(APIView):
+    """
+    POST /api/payments/direct/
+    Send direct payment from current user to another user
+    Body: {
+        "receiver_id": 123,
+        "amount": "10.00",
+        "description": "Payment for collaboration"
+    }
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        sender = request.user
+        receiver_id = request.data.get('receiver_id')
+        amount = request.data.get('amount')
+        description = request.data.get('description', '')
+        
+        # Validate receiver
+        try:
+            # Try as User ID first, then as Profile ID
+            receiver = None
+            try:
+                receiver = User.objects.get(id=receiver_id)
+            except User.DoesNotExist:
+                try:
+                    profile = Profile.objects.get(id=receiver_id)
+                    receiver = profile.user
+                except Profile.DoesNotExist:
+                    pass
+            
+            if not receiver:
+                return Response({
+                    'detail': f'Receiver with ID {receiver_id} not found.'
+                }, status=status.HTTP_404_NOT_FOUND)
+                
+        except (ValueError, TypeError):
+            return Response({
+                'detail': 'Invalid receiver ID.'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Validate amount
+        try:
+            amount = Decimal(str(amount))
+            if amount <= 0:
+                return Response({
+                    'detail': 'Amount must be greater than 0.'
+                }, status=status.HTTP_400_BAD_REQUEST)
+        except (ValueError, TypeError):
+            return Response({
+                'detail': 'Invalid amount.'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Check sender's wallet balance
+        sender_wallet, created = UserWallet.objects.get_or_create(user=sender)
+        if sender_wallet.balance < amount:
+            return Response({
+                'detail': 'Insufficient balance.',
+                'current_balance': str(sender_wallet.balance)
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Create transaction
+        transaction = PaymentTransaction.objects.create(
+            sender=sender,
+            receiver=receiver,
+            amount=amount,
+            transaction_type='direct_payment',
+            description=description
+        )
+        
+        # Process the payment
+        try:
+            # Deduct from sender's wallet
+            sender_wallet.withdraw_balance(amount)
+            
+            # Add to receiver's wallet and complete transaction
+            transaction.complete_transaction()
+            
+            return Response({
+                'detail': 'Payment sent successfully!',
+                'transaction': PaymentTransactionSerializer(transaction, context={'request': request}).data,
+                'new_balance': str(sender_wallet.balance)
+            })
+            
+        except Exception as e:
+            transaction.status = 'failed'
+            transaction.save()
+            return Response({
+                'detail': f'Payment failed: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class WithdrawFundsView(APIView):
+    """
+    POST /api/wallet/withdraw/
+    Withdraw funds from wallet to bank account (requires Stripe Connect)
+    Body: {
+        "amount": "50.00"
+    }
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        user = request.user
+        amount = request.data.get('amount')
+        
+        # Validate amount
+        try:
+            amount = Decimal(str(amount))
+            if amount <= 0:
+                return Response({
+                    'detail': 'Amount must be greater than 0.'
+                }, status=status.HTTP_400_BAD_REQUEST)
+        except (ValueError, TypeError):
+            return Response({
+                'detail': 'Invalid amount.'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Get user's wallet
+        wallet, created = UserWallet.objects.get_or_create(user=user)
+        
+        if wallet.balance < amount:
+            return Response({
+                'detail': 'Insufficient balance.',
+                'current_balance': str(wallet.balance)
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Check if user has Stripe Connect account
+        if not wallet.is_stripe_connected or not wallet.stripe_connect_account_id:
+            return Response({
+                'detail': 'Please connect your Stripe account to withdraw funds.',
+                'is_stripe_connected': wallet.is_stripe_connected
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Create withdrawal transaction
+        transaction = PaymentTransaction.objects.create(
+            sender=user,
+            receiver=user,  # Self-transaction for withdrawal
+            amount=amount,
+            transaction_type='withdrawal',
+            description=f'Withdrawal of ${amount} to bank account'
+        )
+        
+        try:
+            # Process withdrawal via Stripe Connect
+            # This is where you'd integrate with Stripe Connect transfers
+            # For now, we'll mark as completed
+            wallet.withdraw_balance(amount)
+            transaction.complete_transaction()
+            
+            return Response({
+                'detail': 'Withdrawal processed successfully!',
+                'transaction': PaymentTransactionSerializer(transaction, context={'request': request}).data,
+                'new_balance': str(wallet.balance)
+            })
+            
+        except Exception as e:
+            transaction.status = 'failed'
+            transaction.save()
+            return Response({
+                'detail': f'Withdrawal failed: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

@@ -16,6 +16,7 @@ from .views import (
     CreateStripeCheckoutSessionView, CreateSwapCheckoutSessionView, SyncSwapPaymentView, ConfirmSwapPaymentView, StripeWebhookView, ChangePlanView,
     SetupIntentView, SavedPaymentMethodsView, DeletePaymentMethodView, SetDefaultPaymentMethodView,
     PreviewPlanChangeView, SyncSubscriptionView, UpgradeSubscriptionView,
+    WalletView, WalletTransactionHistoryView, WithdrawFundsView, DirectPaymentView,
 )
 from .calendar_views import (
     GoogleCalendarExportView, OutlookCalendarExportView, ICSExportView, CalendarExportOptionsView
@@ -99,6 +100,12 @@ urlpatterns = [
     path('stripe/payment-methods/<str:pm_id>/', DeletePaymentMethodView.as_view(), name='stripe-delete-payment-method'),
     path('stripe/payment-methods/<str:pm_id>/set-default/', SetDefaultPaymentMethodView.as_view(), name='stripe-set-default-pm'),
     path('stripe/webhook/', StripeWebhookView.as_view(), name='stripe-webhook'),
+
+    # Wallet & Payment System
+    path('wallet/', WalletView.as_view(), name='wallet'),
+    path('wallet/transactions/', WalletTransactionHistoryView.as_view(), name='wallet-transactions'),
+    path('wallet/withdraw/', WithdrawFundsView.as_view(), name='wallet-withdraw'),
+    path('payments/direct/', DirectPaymentView.as_view(), name='direct-payment'),
 
     # Calendar Export
     path('calendar/google/', GoogleCalendarExportView.as_view(), name='calendar-google'),
