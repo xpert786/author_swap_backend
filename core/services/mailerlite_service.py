@@ -51,7 +51,8 @@ def get_subscriber_counts_by_status(api_key: str = None) -> dict:
         logger.warning("No API key provided for get_subscriber_counts_by_status")
         return {}
 
-    is_new_api = api_key.startswith("mlsn.")
+    # New tokens start with "mlsn." OR are JWT tokens (eyJ)
+    is_new_api = api_key.startswith("mlsn.") or api_key.startswith("eyJ")
     logger.info(f"[DIAGNOSTIC] API key format check: is_new_api={is_new_api}, key prefix: {api_key[:15]}...")
     
     # Status mapping: internal name -> MailerLite status name
@@ -294,8 +295,8 @@ def get_audience_size(email: str = None, api_key: str = None) -> int:
     if not api_key:
         return 0
 
-    # New tokens start with "mlsn."
-    is_new_api = api_key.startswith("mlsn.")
+    # New tokens start with "mlsn." OR are JWT tokens (eyJ)
+    is_new_api = api_key.startswith("mlsn.") or api_key.startswith("eyJ")
     
     try:
         if is_new_api:
