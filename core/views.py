@@ -2633,10 +2633,20 @@ class ChatHistoryView(APIView):
         except User.DoesNotExist:
             # Provide more helpful error message with available users
             available_users = list(User.objects.values_list('id', flat=True))
+            user_details = []
+            for uid in available_users[:5]:  # Show first 5 users for context
+                try:
+                    u = User.objects.get(id=uid)
+                    profile = u.profiles.first()
+                    user_details.append(f"{uid}: {profile.name if profile else u.username}")
+                except:
+                    user_details.append(f"{uid}: (error loading user)")
+            
             return Response({
                 "detail": f"User with ID {receiver_id} not found.",
                 "available_user_ids": available_users,
-                "message": f"Please check the user ID. Available user IDs are: {available_users}"
+                "user_details": user_details,
+                "message": f"Please check the user ID. Available user IDs are: {available_users[:10]}{'...' if len(available_users) > 10 else ''}"
             }, status=status.HTTP_404_NOT_FOUND)
 
         # Fetch all messages between the two users
@@ -2715,10 +2725,20 @@ class SendMessageView(APIView):
         except User.DoesNotExist:
             # Provide more helpful error message with available users
             available_users = list(User.objects.values_list('id', flat=True))
+            user_details = []
+            for uid in available_users[:5]:  # Show first 5 users for context
+                try:
+                    u = User.objects.get(id=uid)
+                    profile = u.profiles.first()
+                    user_details.append(f"{uid}: {profile.name if profile else u.username}")
+                except:
+                    user_details.append(f"{uid}: (error loading user)")
+            
             return Response({
                 "detail": f"Recipient with ID {user_id} not found.",
                 "available_user_ids": available_users,
-                "message": f"Please check the recipient ID. Available user IDs are: {available_users}"
+                "user_details": user_details,
+                "message": f"Please check the recipient ID. Available user IDs are: {available_users[:10]}{'...' if len(available_users) > 10 else ''}"
             }, status=status.HTTP_404_NOT_FOUND)
 
         if recipient.id == user.id:
