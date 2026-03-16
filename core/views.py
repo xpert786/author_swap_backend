@@ -2678,7 +2678,15 @@ class SendMessageView(APIView):
         try:
             recipient = User.objects.get(id=user_id)
         except User.DoesNotExist:
-            return Response({"detail": "Recipient not found."}, status=status.HTTP_404_NOT_FOUND)
+            # Provide more helpful error message with available users
+            from django.contrib.auth import get_user_model
+            User = get_user_model()
+            available_users = list(User.objects.values_list('id', flat=True))
+            return Response({
+                "detail": f"Recipient with ID {user_id} not found.",
+                "available_user_ids": available_users,
+                "message": f"Please check the recipient ID. Available user IDs are: {available_users}"
+            }, status=status.HTTP_404_NOT_FOUND)
 
         if recipient.id == user.id:
             return Response({"detail": "You cannot send a message to yourself."}, status=status.HTTP_400_BAD_REQUEST)
