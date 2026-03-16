@@ -399,18 +399,22 @@ class SwapManagementSerializer(serializers.ModelSerializer):
         if is_paid:
             payment = getattr(obj, 'payment', None)
             if obj.status in ['confirmed', 'completed', 'scheduled']:
-                # Only show as 'completed' if payment is done AND receiver confirmed
+                # Only show as 'completed' if payment is done AND scheduled_date has passed
                 if payment and payment.status == 'completed':
-                    # Payment completed - check if receiver confirmed receipt
-                    if payment.receiver_confirmed:
+                    from django.utils import timezone
+                    # Check if scheduled_date has passed
+                    if obj.scheduled_date and obj.scheduled_date <= timezone.now().date():
                         return 'completed'
-                    # Otherwise, remain as scheduled until receiver confirms
+                    # Otherwise, remain as scheduled until newsletter date
                     return 'scheduled'
                 # Otherwise show as 'scheduled' (payment pending)
                 return 'scheduled'
         
-        # For non-paid swaps, keep original logic
+        # For non-paid swaps, check scheduled_date
         if obj.status in ['confirmed', 'completed', 'scheduled']:
+            from django.utils import timezone
+            if obj.scheduled_date and obj.scheduled_date <= timezone.now().date():
+                return 'completed'
             return 'scheduled'
             
         return obj.status
@@ -745,11 +749,19 @@ class SwapHistoryDetailSerializer(serializers.ModelSerializer):
             if is_paid:
                 payment = getattr(obj, 'payment', None)
                 if payment and payment.status == 'completed':
-                    # Payment completed - check if receiver confirmed receipt
-                    if payment.receiver_confirmed:
+                    # Payment completed - check if scheduled_date has passed
+                    from django.utils import timezone
+                    if obj.scheduled_date and obj.scheduled_date <= timezone.now().date():
                         return 'Swap Completed'
-                    # Otherwise, remain as scheduled until receiver confirms
+                    # Otherwise, remain as scheduled until newsletter date
                     return 'Swap Scheduled'
+        
+        # For non-paid swaps, check scheduled_date
+        if obj.status in ['confirmed', 'completed', 'scheduled']:
+            from django.utils import timezone
+            if obj.scheduled_date and obj.scheduled_date <= timezone.now().date():
+                return 'Swap Completed'
+            return 'Swap Scheduled'
         
         labels = {
             'pending': 'Swap Pending',
