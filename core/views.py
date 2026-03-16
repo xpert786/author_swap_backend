@@ -4864,12 +4864,11 @@ class WalletTransactionHistoryView(APIView):
     def get(self, request):
         user = request.user
         
-        # Get all transactions involving this user
-        sent_transactions = PaymentTransaction.objects.filter(sender=user)
-        received_transactions = PaymentTransaction.objects.filter(receiver=user)
-        
-        # Combine and sort by date
-        all_transactions = sent_transactions.union(received_transactions).order_by('-created_at')
+        # Get all transactions involving this user using Q objects for efficiency and SQLite compatibility
+        from django.db.models import Q
+        all_transactions = PaymentTransaction.objects.filter(
+            Q(sender=user) | Q(receiver=user)
+        ).order_by('-created_at')
         
         # Apply filters
         transaction_type = request.query_params.get('type', None)
