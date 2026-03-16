@@ -2629,10 +2629,20 @@ class ChatHistoryView(APIView):
     def get(self, request, receiver_id):
         user = request.user
 
-        # Validate other user exists
+        # Try to find user by ID first, then by profile ID
+        other_user = None
         try:
+            # First try as User ID
             other_user = User.objects.get(id=receiver_id)
         except User.DoesNotExist:
+            try:
+                # If not found, try as Profile ID
+                profile = Profile.objects.get(id=receiver_id)
+                other_user = profile.user
+            except Profile.DoesNotExist:
+                pass
+
+        if not other_user:
             # Provide more helpful error message with available users
             available_users = list(User.objects.values_list('id', flat=True))
             user_details = []
@@ -2722,9 +2732,20 @@ class SendMessageView(APIView):
     def post(self, request, user_id):
         user = request.user
         
+        # Try to find user by ID first, then by profile ID
+        recipient = None
         try:
+            # First try as User ID
             recipient = User.objects.get(id=user_id)
         except User.DoesNotExist:
+            try:
+                # If not found, try as Profile ID
+                profile = Profile.objects.get(id=user_id)
+                recipient = profile.user
+            except Profile.DoesNotExist:
+                pass
+
+        if not recipient:
             # Provide more helpful error message with available users
             available_users = list(User.objects.values_list('id', flat=True))
             user_details = []
