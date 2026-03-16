@@ -2602,7 +2602,13 @@ class ChatHistoryView(APIView):
         try:
             other_user = User.objects.get(id=receiver_id)
         except User.DoesNotExist:
-            return Response({"detail": "User not found."}, status=status.HTTP_404_NOT_FOUND)
+            # Provide more helpful error message with available users
+            available_users = list(User.objects.values_list('id', flat=True))
+            return Response({
+                "detail": f"User with ID {receiver_id} not found.",
+                "available_user_ids": available_users,
+                "message": f"Please check the user ID. Available user IDs are: {available_users}"
+            }, status=status.HTTP_404_NOT_FOUND)
 
         # Fetch all messages between the two users
         messages = ChatMessage.objects.filter(
@@ -2679,8 +2685,6 @@ class SendMessageView(APIView):
             recipient = User.objects.get(id=user_id)
         except User.DoesNotExist:
             # Provide more helpful error message with available users
-            from django.contrib.auth import get_user_model
-            User = get_user_model()
             available_users = list(User.objects.values_list('id', flat=True))
             return Response({
                 "detail": f"Recipient with ID {user_id} not found.",
