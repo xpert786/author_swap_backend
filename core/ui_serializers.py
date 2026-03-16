@@ -5,11 +5,12 @@ class AuthorProfileSerializer(serializers.ModelSerializer):
     """Used for nested author representations"""
     swaps_completed = serializers.SerializerMethodField()
     rating = serializers.FloatField(source='reputation_score', read_only=True)
+    user_id = serializers.IntegerField(source='user.id', read_only=True)  # Add user ID for chat
 
     class Meta:
         model = Profile
         fields = [
-            'id', 'name', 'profile_picture', 'swaps_completed', 'reputation_score', 'rating',
+            'id', 'user_id', 'name', 'profile_picture', 'swaps_completed', 'reputation_score', 'rating',
             'primary_genre', 'send_reliability_percent'
         ]
 

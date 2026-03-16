@@ -2503,7 +2503,9 @@ class ComposePartnerListView(APIView):
                     'max_partners': latest_slot.max_partners if latest_slot else 1,
                 },
                 'author': {
-                    'id': u.id,  # Use user ID, not profile ID, for chat functionality
+                    'id': u.id,  # User ID for chat functionality
+                    'user_id': u.id,  # Explicit user_id field
+                    'profile_id': profile.id if profile else None,  # Profile ID for reference
                     'name': profile.name if profile else u.username,
                     'profile_picture': profile_pic,
                     'swaps_completed': profile.swaps_completed if profile else 0,
