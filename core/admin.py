@@ -2,7 +2,8 @@ from django.contrib import admin
 from .models import (
     Profile, NewsletterSlot, Notification, SwapRequest, Book, 
     SubscriberVerification, Email, ChatMessage, SubscriptionTier, 
-    UserSubscription, SubscriberGrowth, CampaignAnalytic, SwapLinkClick
+    UserSubscription, SubscriberGrowth, CampaignAnalytic, SwapLinkClick,
+    SwapPayment, UserWallet, PaymentTransaction
 )
 
 # Basic Registrations
@@ -60,6 +61,24 @@ class ChatMessageAdmin(admin.ModelAdmin):
     list_filter = ['is_read', 'is_file']
     search_fields = ['content', 'sender__username', 'recipient__username']
     ordering = ['-created_at']
+
+
+@admin.register(SwapPayment)
+class SwapPaymentAdmin(admin.ModelAdmin):
+    list_display = ['id', 'swap_request', 'payer', 'amount', 'status', 'paid_at']
+    list_filter = ['status']
+    search_fields = ['payer__username', 'swap_request__id']
+
+@admin.register(UserWallet)
+class UserWalletAdmin(admin.ModelAdmin):
+    list_display = ['user', 'balance', 'total_earned', 'total_withdrawn', 'is_stripe_connected']
+    search_fields = ['user__username']
+
+@admin.register(PaymentTransaction)
+class PaymentTransactionAdmin(admin.ModelAdmin):
+    list_display = ['id', 'sender', 'receiver', 'amount', 'transaction_type', 'status', 'created_at']
+    list_filter = ['transaction_type', 'status']
+    search_fields = ['sender__username', 'receiver__username', 'description']
 
 
     
