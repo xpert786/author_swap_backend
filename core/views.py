@@ -2433,7 +2433,7 @@ class ConversationListView(APIView):
 class ComposePartnerListView(APIView):
     """
     GET /api/chat/compose/?search=query
-    Returns list of all available slots (same format as /api/slots/explore/)
+    Returns list of unique swap partners (authors) with their latest slot info.
     Supports search by author name, username, or genre.
     """
     permission_classes = [IsAuthenticated]
@@ -2442,52 +2442,81 @@ class ComposePartnerListView(APIView):
         user = request.user
         search = request.query_params.get('search', '').strip()
         
-        # Get all slots excluding the current user's own slots
-        slots = NewsletterSlot.objects.exclude(user=user).order_by('-created_at')
+        # Get all users who have slots (exclude current user)
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        
+        users = User.objects.exclude(id=user.id).filter(slots__isnull=False).distinct()
         
         # Apply search filter if provided
         if search:
-            slots = slots.filter(
-                Q(user__username__icontains=search) |
-                Q(user__profiles__name__icontains=search) |
-                Q(preferred_genre__icontains=search)
+            users = users.filter(
+                Q(username__icontains=search) |
+                Q(profiles__name__icontains=search) |
+                Q(slots__preferred_genre__icontains=search)
             )
         
-        # Serialize slots in SlotExplore format
+        # Serialize unique authors with their latest slot info
         result = []
-        for slot in slots:
-            profile = slot.user.profiles.first()
+        for u in users:
+            profile = u.profiles.first()
             profile_pic = None
             if profile and profile.profile_picture:
                 profile_pic = request.build_absolute_uri(profile.profile_picture.url)
             
-            # Count current partners
-            current_partners = slot.swap_requests.filter(
-                status__in=['confirmed', 'verified', 'scheduled', 'completed']
-            ).count()
+            # Get latest slot for this user
+            latest_slot = NewsletterSlot.objects.filter(user=u).order_by('-created_at').first()
+            
+            # Count current partners across all slots
+            from django.db.models import Count, Q
+            current_partners = NewsletterSlot.objects.filter(user=u).aggregate(
+                total_partners=Count('swap_requests', filter=Q(swap_requests__status__in=['confirmed', 'verified', 'scheduled', 'completed']))
+            )['total_partners'] or 0
+            
+            # Check if already chatted
+            has_chat = ChatMessage.objects.filter(
+                Q(sender=user, recipient=u) | Q(sender=u, recipient=user)
+            ).exists()
+            
+            # Check if swap partner
+            is_swap_partner = SwapRequest.objects.filter(
+                (Q(requester=user) & Q(slot__user=u)) |
+                (Q(requester=u) & Q(slot__user=user))
+            ).exclude(status='rejected').exists()
             
             result.append({
-                'id': slot.id,
-                'send_date': slot.send_date,
-                'send_time': slot.send_time,
-                'audience_size': slot.audience_size,
-                'visibility': slot.visibility,
-                'status': slot.status,
-                'promotion_type': slot.promotion_type,
-                'price': float(slot.price) if slot.price else 0.00,
-                'preferred_genre': slot.preferred_genre,
-                'current_partners_count': current_partners,
-                'max_partners': slot.max_partners,
+                'id': u.id,
+                'user_id': u.id,
+                'username': u.username,
+                'name': profile.name if profile else u.username,
+                'profile_picture': profile_pic,
+                'latest_slot': {
+                    'id': latest_slot.id if latest_slot else None,
+                    'send_date': latest_slot.send_date if latest_slot else None,
+                    'send_time': latest_slot.send_time if latest_slot else None,
+                    'audience_size': latest_slot.audience_size if latest_slot else '0',
+                    'visibility': latest_slot.visibility if latest_slot else 'public',
+                    'status': latest_slot.status if latest_slot else 'active',
+                    'promotion_type': latest_slot.promotion_type if latest_slot else 'swap',
+                    'price': float(latest_slot.price) if latest_slot and latest_slot.price else 0.00,
+                    'preferred_genre': latest_slot.preferred_genre if latest_slot else (profile.primary_genre if profile else None),
+                    'max_partners': latest_slot.max_partners if latest_slot else 1,
+                },
                 'author': {
-                    'id': profile.id if profile else slot.user.id,
-                    'name': profile.name if profile else slot.user.username,
+                    'id': profile.id if profile else u.id,
+                    'name': profile.name if profile else u.username,
                     'profile_picture': profile_pic,
                     'swaps_completed': profile.swaps_completed if profile else 0,
                     'reputation_score': profile.reputation_score if profile else 5.0,
                     'rating': profile.reputation_score if profile else 5.0,
-                    'primary_genre': profile.primary_genre if profile else slot.preferred_genre,
+                    'primary_genre': profile.primary_genre if profile else (latest_slot.preferred_genre if latest_slot else None),
                     'send_reliability_percent': profile.send_reliability_percent if profile else 0,
                 },
+                'total_partners_count': current_partners,
+                'available_slots': NewsletterSlot.objects.filter(user=u).count(),
+                'has_chat_history': has_chat,
+                'is_swap_partner': is_swap_partner,
+                'eligible_to_chat': True,
             })
         
         return Response(result)
