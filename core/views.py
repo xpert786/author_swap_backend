@@ -5,7 +5,7 @@ from django.http import Http404
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from .serializers import (
     NewsletterSlotSerializer, NotificationSerializer, SwapPartnerSerializer, 
     SwapRequestSerializer, SwapManagementSerializer, BookSerializer, ProfileSerializer, RecentSwapSerializer,
@@ -4927,14 +4927,19 @@ class DirectPaymentView(APIView):
         
         # Validate amount
         try:
+            if amount is None or str(amount).strip() == '':
+                return Response({
+                    'detail': 'Amount is required.'
+                }, status=status.HTTP_400_BAD_REQUEST)
+                
             amount = Decimal(str(amount))
             if amount <= 0:
                 return Response({
                     'detail': 'Amount must be greater than 0.'
                 }, status=status.HTTP_400_BAD_REQUEST)
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, InvalidOperation) as e:
             return Response({
-                'detail': 'Invalid amount.'
+                'detail': f'Invalid amount: {str(e)}'
             }, status=status.HTTP_400_BAD_REQUEST)
         
         # Check sender's wallet balance
@@ -4992,14 +4997,19 @@ class WithdrawFundsView(APIView):
         
         # Validate amount
         try:
+            if amount is None or str(amount).strip() == '':
+                return Response({
+                    'detail': 'Amount is required.'
+                }, status=status.HTTP_400_BAD_REQUEST)
+                
             amount = Decimal(str(amount))
             if amount <= 0:
                 return Response({
                     'detail': 'Amount must be greater than 0.'
                 }, status=status.HTTP_400_BAD_REQUEST)
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, InvalidOperation) as e:
             return Response({
-                'detail': 'Invalid amount.'
+                'detail': f'Invalid amount: {str(e)}'
             }, status=status.HTTP_400_BAD_REQUEST)
         
         # Get user's wallet
