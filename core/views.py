@@ -2480,6 +2480,8 @@ class ComposePartnerListView(APIView):
             # Format matching SlotExploreSerializer structure
             result.append({
                 'id': u.id,
+                'name': profile.name if profile else u.username,
+                'profile_picture': profile_pic,
                 'send_date': latest_slot.send_date if latest_slot else None,
                 'send_time': latest_slot.send_time if latest_slot else None,
                 'audience_size': latest_slot.audience_size if latest_slot else '0',
