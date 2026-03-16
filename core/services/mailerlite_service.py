@@ -457,13 +457,15 @@ def sync_subscriber_analytics(user):
         logger.info(f"Fetching status counts for user {user.username}, is_new={is_new_api}")
         status_counts = get_subscriber_counts_by_status(api_key)
         logger.info(f"Status counts result: {status_counts}")
-        if status_counts is not None:
+        if status_counts and isinstance(status_counts, dict) and len(status_counts) > 0:
             # Update verification with latest counts (even if 0)
             verification.active_subscribers = status_counts.get('active', 0)
             verification.unsubscribed_subscribers = status_counts.get('unsubscribed', 0)
             verification.unconfirmed_subscribers = status_counts.get('unconfirmed', 0)
             verification.bounced_subscribers = status_counts.get('bounced', 0)
             verification.junk_subscribers = status_counts.get('junk', 0)
+            
+            logger.info(f"[SYNC] Setting active_subscribers to: {verification.active_subscribers}")
             
             # Use dashboard_total if provided, otherwise fallback to active + unconfirmed
             db_total = status_counts.get('dashboard_total', 0)

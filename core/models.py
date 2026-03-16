@@ -380,6 +380,11 @@ class SwapPayment(models.Model):
     
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     paid_at = models.DateTimeField(null=True, blank=True)
+    
+    # Receiver confirmation fields
+    receiver_confirmed = models.BooleanField(default=False)
+    receiver_confirmed_at = models.DateTimeField(null=True, blank=True)
+    
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

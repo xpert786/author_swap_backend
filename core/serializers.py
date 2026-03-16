@@ -399,9 +399,13 @@ class SwapManagementSerializer(serializers.ModelSerializer):
         if is_paid:
             payment = getattr(obj, 'payment', None)
             if obj.status in ['confirmed', 'completed', 'scheduled']:
-                # Only show as 'completed' if payment is done
+                # Only show as 'completed' if payment is done AND receiver confirmed
                 if payment and payment.status == 'completed':
-                    return 'completed'
+                    # Payment completed - check if receiver confirmed receipt
+                    if payment.receiver_confirmed:
+                        return 'completed'
+                    # Otherwise, remain as scheduled until receiver confirms
+                    return 'scheduled'
                 # Otherwise show as 'scheduled' (payment pending)
                 return 'scheduled'
         
@@ -741,14 +745,18 @@ class SwapHistoryDetailSerializer(serializers.ModelSerializer):
             if is_paid:
                 payment = getattr(obj, 'payment', None)
                 if payment and payment.status == 'completed':
-                    return 'Swap Completed'
+                    # Payment completed - check if receiver confirmed receipt
+                    if payment.receiver_confirmed:
+                        return 'Swap Completed'
+                    # Otherwise, remain as scheduled until receiver confirms
+                    return 'Swap Scheduled'
         
         labels = {
             'pending': 'Swap Pending',
             'confirmed': 'Swap Scheduled',
             'sending': 'Swap Sending',
             'scheduled': 'Swap Scheduled',
-            'completed': 'Swap Scheduled',
+            'completed': 'Swap Completed',
             'verified': 'Swap Verified',
             'rejected': 'Swap Rejected',
         }

@@ -2325,7 +2325,8 @@ class ChatAuthorListView(APIView):
 class ConversationListView(APIView):
     """
     GET /api/chat/conversations/?search=query
-    Returns list of conversations the current user has (authors they've chatted with).
+    Returns list of all swap partners the current user can communicate with.
+    Includes both users with existing chats and all swap partners.
     Each has: last message, unread count, profile info, and swap status.
     """
     permission_classes = [IsAuthenticated]
@@ -2334,15 +2335,30 @@ class ConversationListView(APIView):
         user = request.user
         search = request.query_params.get('search', '').strip()
 
-        # Find all unique users the current user has chatted with
+        # 1. Find all swap partners (users from swap requests)
+        swap_requests = SwapRequest.objects.filter(
+            (Q(requester=user) | Q(slot__user=user))
+        ).exclude(status='rejected')
+        
+        swap_partner_ids = set()
+        for sr in swap_requests:
+            if sr.requester == user:
+                swap_partner_ids.add(sr.slot.user_id)
+            else:
+                swap_partner_ids.add(sr.requester_id)
+
+        # 2. Find all users the current user has chatted with
         sent_to_ids = ChatMessage.objects.filter(sender=user).values_list('recipient_id', flat=True).distinct()
         received_from_ids = ChatMessage.objects.filter(recipient=user).values_list('sender_id', flat=True).distinct()
         chat_partner_ids = set(sent_to_ids) | set(received_from_ids)
 
-        if not chat_partner_ids:
+        # 3. Combine both sets (all swap partners + all chat partners)
+        all_partner_ids = swap_partner_ids | chat_partner_ids
+
+        if not all_partner_ids:
             return Response([])
 
-        profiles = Profile.objects.filter(user_id__in=chat_partner_ids).select_related('user')
+        profiles = Profile.objects.filter(user_id__in=all_partner_ids).select_related('user')
 
         if search:
             profiles = profiles.filter(
@@ -2384,7 +2400,7 @@ class ConversationListView(APIView):
                 else:
                     formatted_time = msg_date.strftime("%m/%d/%Y")
 
-            # Swap status logic from HEAD
+            # Swap status logic
             swap = SwapRequest.objects.filter(
                 (Q(requester=user) & Q(slot__user=partner)) |
                 (Q(requester=partner) & Q(slot__user=user))
@@ -2393,24 +2409,24 @@ class ConversationListView(APIView):
             swap_status = swap.status if swap else None
 
             conversations.append({
-                'id': partner.id, # Added for frontend compatibility
+                'id': partner.id,
                 'user_id': partner.id,
                 'username': partner.username,
                 'name': profile.name,
-                'avatar': profile_pic, # Added for frontend compatibility
+                'avatar': profile_pic,
                 'profile_picture': profile_pic,
                 'location': profile.location,
-                'lastMessage': last_msg.content if last_msg else "", # Added for frontend compatibility
+                'lastMessage': last_msg.content if last_msg else "",
                 'last_message': last_msg.content[:80] if last_msg else "",
                 'last_message_time': last_msg.created_at if last_msg else None,
-                'time': formatted_time, # Added for frontend compatibility
+                'time': formatted_time,
                 'formatted_time': formatted_time,
                 'unread_count': unread,
-                'swap_status': swap_status, # Added for frontend compatibility
+                'swap_status': swap_status,
             })
 
-        # Sort: most recent conversation first
-        conversations.sort(key=lambda x: x.get('last_message_time') or datetime.min, reverse=True)
+        # Sort: most recent conversation first, then alphabetically for new partners
+        conversations.sort(key=lambda x: (x.get('last_message_time') or datetime.min, x.get('name', '')), reverse=True)
 
         return Response(conversations)
 
@@ -3553,6 +3569,90 @@ class SyncSwapPaymentView(APIView):
             import logging
             logging.getLogger(__name__).error(f"SyncSwapPayment Error: {str(e)}")
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class ConfirmSwapPaymentView(APIView):
+    """
+    POST /api/stripe/confirm-swap-payment/<swap_request_id>/
+
+    Allows the RECEIVER (slot owner) to confirm they received the payment.
+    This updates the payment status to show as 'completed' in the swap status.
+
+    Body: { "confirm": true }  (optional, defaults to true)
+
+    Response (success):
+        {
+            "detail": "Payment confirmed.",
+            "status": "completed",
+            "receiver_confirmed": true,
+            "confirmed_at": "2026-03-16T12:00:00Z"
+        }
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, swap_request_id):
+        try:
+            swap_request = SwapRequest.objects.get(
+                id=swap_request_id,
+                slot__user=request.user  # Only the slot owner (receiver) can confirm
+            )
+        except SwapRequest.DoesNotExist:
+            return Response(
+                {'detail': 'Swap request not found or you are not authorized to confirm this payment.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # Get the payment record
+        payment = getattr(swap_request, 'payment', None)
+        if not payment:
+            return Response(
+                {'detail': 'No payment record found for this swap.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Check if payment is completed
+        if payment.status != 'completed':
+            return Response(
+                {'detail': 'Payment has not been completed yet.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Check if already confirmed
+        if payment.receiver_confirmed:
+            return Response(
+                {
+                    'detail': 'Payment has already been confirmed.',
+                    'status': 'completed',
+                    'receiver_confirmed': True,
+                    'confirmed_at': payment.receiver_confirmed_at,
+                }
+            )
+
+        # Confirm the payment
+        from django.utils import timezone
+        payment.receiver_confirmed = True
+        payment.receiver_confirmed_at = timezone.now()
+        payment.save(update_fields=['receiver_confirmed', 'receiver_confirmed_at'])
+
+        # Update swap status to completed
+        swap_request.status = 'completed'
+        swap_request.save(update_fields=['status'])
+
+        # Create notification for payer
+        Notification.objects.create(
+            recipient=swap_request.requester,
+            title="Payment Confirmed ✅",
+            badge="SWAP",
+            message=f"{request.user.username} has confirmed receipt of your payment for the swap.",
+            action_url=f"/dashboard/swaps/track/{swap_request.id}/"
+        )
+
+        return Response({
+            'detail': 'Payment confirmed successfully.',
+            'status': 'completed',
+            'receiver_confirmed': True,
+            'confirmed_at': payment.receiver_confirmed_at,
+        })
 
 
 class ChangePlanView(APIView):

@@ -13,7 +13,7 @@ from .views import (
     EmailListView, ComposeEmailView, EmailDetailView, EmailActionView,
     ChatAuthorListView, ConversationListView, ChatHistoryView, SendMessageView,
     MySwapPartnersView, ComposePartnerListView, ChatMessageDetailView,
-    CreateStripeCheckoutSessionView, CreateSwapCheckoutSessionView, SyncSwapPaymentView, StripeWebhookView, ChangePlanView,
+    CreateStripeCheckoutSessionView, CreateSwapCheckoutSessionView, SyncSwapPaymentView, ConfirmSwapPaymentView, StripeWebhookView, ChangePlanView,
     SetupIntentView, SavedPaymentMethodsView, DeletePaymentMethodView, SetDefaultPaymentMethodView,
     PreviewPlanChangeView, SyncSubscriptionView, UpgradeSubscriptionView,
 )
@@ -90,6 +90,7 @@ urlpatterns = [
     path('stripe/create-checkout-session/', CreateStripeCheckoutSessionView.as_view(), name='stripe-create-session'),
     path('stripe/create-swap-checkout-session/', CreateSwapCheckoutSessionView.as_view(), name='stripe-create-swap-session'),
     path('stripe/sync-swap-payment/', SyncSwapPaymentView.as_view(), name='stripe-sync-swap-payment'),
+    path('stripe/confirm-swap-payment/<int:swap_request_id>/', ConfirmSwapPaymentView.as_view(), name='stripe-confirm-swap-payment'),
     path('stripe/change-plan/', ChangePlanView.as_view(), name='stripe-change-plan'),
     path('stripe/change-plan/preview/', PreviewPlanChangeView.as_view(), name='stripe-change-plan-preview'),
     path('stripe/setup-intent/', SetupIntentView.as_view(), name='stripe-setup-intent'),
