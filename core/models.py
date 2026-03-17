@@ -510,9 +510,11 @@ class PaymentTransaction(models.Model):
             self.completed_at = timezone.now()
             self.save()
             
-            # Add money to receiver's wallet
-            wallet, created = UserWallet.objects.get_or_create(user=self.receiver)
-            wallet.add_balance(self.amount)
+            # Add money to receiver's wallet ONLY if it's not a withdrawal
+            # For withdrawals, we've already deducted from the sender's wallet in the view.
+            if self.transaction_type != 'withdrawal':
+                wallet, created = UserWallet.objects.get_or_create(user=self.receiver)
+                wallet.add_balance(self.amount)
             return True
         return False
 
