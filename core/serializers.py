@@ -1476,17 +1476,11 @@ class PaymentTransactionSerializer(serializers.ModelSerializer):
         read_only_fields = ['sender', 'receiver', 'stripe_payment_intent_id', 'stripe_transfer_id']
 
     def get_amount(self, obj):
-        user = self.context.get('request').user if self.context.get('request') else None
-        
-        # If the current user is the sender, show it as negative (money out)
-        # Exception: For Withdrawal, it's always "out" from the internal wallet
+        # Only show negative for withdrawals
         if obj.transaction_type == 'withdrawal':
             return f"-{obj.amount}"
             
-        if user and obj.sender == user:
-            return f"-{obj.amount}"
-            
-        # If the user is NOT the sender (meaning they are the receiver), show it as positive
+        # Everything else (direct payments, etc.) shows as positive
         return str(obj.amount)
     
     def get_sender_profile(self, obj):
