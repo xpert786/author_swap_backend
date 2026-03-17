@@ -245,6 +245,10 @@ class SwapRequest(models.Model):
     
     # Completion
     completed_at = models.DateTimeField(blank=True, null=True)
+    
+    # Author Reputation Tracking
+    tracking_number = models.CharField(max_length=100, blank=True, null=True, help_text="MailerLite Campaign ID or Send Confirmation ID")
+    shipped_at = models.DateTimeField(blank=True, null=True, help_text="Timestamp when the newsletter was definitively sent")
 
     created_at = models.DateTimeField(auto_now_add=True)
 

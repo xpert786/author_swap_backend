@@ -938,6 +938,8 @@ from core.services.mailerlite_service import (
 )
 
 
+from core.services.reputation_service import ReputationService
+
 class SwapManagementListView(APIView):
     """
     GET /api/swaps/
@@ -1048,6 +1050,9 @@ class AcceptSwapView(APIView):
         swap.status = 'scheduled'
         swap.save()
 
+        # AUTOMATED REPUTATION: Update Communication Score
+        ReputationService.record_communication_response(request.user, swap.created_at)
+
         # Update the slot's status if it has reached max capacity
         slot = swap.slot
         accepted_count = SwapRequest.objects.filter(
@@ -1104,6 +1109,9 @@ class RejectSwapView(APIView):
         swap.rejected_at = tz.now()
         swap.save()
 
+        # AUTOMATED REPUTATION: Update Communication Score
+        ReputationService.record_communication_response(request.user, swap.created_at)
+
         # MailerLite: move to Rejected group
         requester_email = swap.requester.email
         try:
@@ -1123,6 +1131,61 @@ class RejectSwapView(APIView):
         return Response({
             "detail": "Swap request declined.",
             "swap": SwapManagementSerializer(swap, context={'request': request}).data
+        })
+
+
+class MarkSwapSentView(APIView):
+    """
+    POST /api/swaps/<id>/mark-sent/
+    Body: { "tracking_number": "ML-998877" }
+    Author confirms they sent the newsletter.
+    This increases 'Confirmed Sends' and 'Timeliness' reputation scores.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        try:
+            # User must be a participant in the swap
+            swap = SwapRequest.objects.get(pk=pk)
+            if swap.slot.user != request.user and swap.requester != request.user:
+                return Response({"detail": "You are not a partner in this swap."}, status=status.HTTP_403_FORBIDDEN)
+        except SwapRequest.DoesNotExist:
+            return Response({"detail": "Swap request not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        tracking_number = request.data.get('tracking_number')
+        if not tracking_number:
+            return Response({"detail": "Tracking number or campaign ID is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Mark as completed
+        swap.status = 'completed'
+        swap.tracking_number = tracking_number
+        swap.shipped_at = tz.now()
+        swap.completed_at = tz.now()
+        swap.save()
+
+        # AUTOMATED REPUTATION: Award points
+        ReputationService.update_confirmed_sends(request.user)
+        
+        # Timeliness check: within 24h of scheduled_date
+        is_timely = True
+        if swap.scheduled_date:
+            deadline = swap.scheduled_date + timedelta(days=1)
+            is_timely = (tz.now().date() <= deadline)
+        ReputationService.update_timeliness(request.user, is_fast=is_timely)
+
+        # Notification for the other partner
+        partner = swap.requester if swap.slot.user == request.user else swap.slot.user
+        Notification.objects.create(
+            recipient=partner,
+            title="Swap Confirmed! 📧",
+            badge="SWAP",
+            message=f"{request.user.username} has confirmed sending their newsletter promo. Tracking: {tracking_number}.",
+            action_url=f"/dashboard/swaps/track/{swap.id}/"
+        )
+
+        return Response({
+            "detail": "Swap confirmed. Reputation points awarded.",
+            "status": "completed"
         })
 
 
@@ -1251,10 +1314,15 @@ class CancelSwapView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        old_status = swap.status
         swap.status = 'rejected'
         swap.rejection_reason = 'Cancelled by requester.'
         swap.rejected_at = tz.now()
         swap.save()
+
+        # AUTOMATED REPUTATION: Apply penalty if cancelled late
+        if old_status in ['scheduled', 'sending', 'confirmed']:
+            ReputationService.apply_missed_send_penalty(request.user)
 
         # Notification for slot owner
         from core.models import Notification
