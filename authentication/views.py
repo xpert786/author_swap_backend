@@ -82,6 +82,14 @@ class LoginAPIView(APIView):
             access_token = refresh.access_token
             onboarding = get_onboarding_status(user)
 
+            # --- AUTOMATED SYNC ON LOGIN ---
+            # Trigger background sync of MailerLite and Reputation Scores
+            try:
+                from core.services.mailerlite_service import sync_subscriber_analytics
+                sync_subscriber_analytics(user)
+            except Exception:
+                pass
+
             return Response({
                 'refresh': str(refresh),
                 'access': str(access_token),
@@ -478,6 +486,13 @@ class GoogleOAuthView(APIView):
         refresh = RefreshToken.for_user(user)
         access_token = refresh.access_token
         onboarding = get_onboarding_status(user)
+
+        # --- AUTOMATED SYNC ON LOGIN ---
+        try:
+            from core.services.mailerlite_service import sync_subscriber_analytics
+            sync_subscriber_analytics(user)
+        except Exception:
+            pass
 
         return Response({
             'refresh': str(refresh),
