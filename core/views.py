@@ -3178,12 +3178,30 @@ class UpgradeSubscriptionView(APIView):
 
             subscription_item_id = stripe_sub['items']['data'][0]['id']
 
-            updated_sub = stripe.Subscription.modify(
-                user_sub.stripe_subscription_id,
-                items=[{"id": subscription_item_id, "price": new_price_id}],
-                default_payment_method=default_pm_id,
-                proration_behavior="always_invoice",  # immediately charges the prorated difference
-            )
+            try:
+                updated_sub = stripe.Subscription.modify(
+                    user_sub.stripe_subscription_id,
+                    items=[{"id": subscription_item_id, "price": new_price_id}],
+                    default_payment_method=default_pm_id,
+                    proration_behavior="always_invoice",  # immediately charges the prorated difference
+                )
+            except stripe.error.CardError:
+                # If direct charge fails, fall back to returning a checkout URL
+                _apply_unused_credit(user_sub, cust_id)
+                checkout_session = stripe.checkout.Session.create(
+                    payment_method_types=['card'],
+                    line_items=[{'price': new_price_id, 'quantity': 1}],
+                    mode='subscription',
+                    client_reference_id=str(request.user.id),
+                    customer=cust_id,
+                    success_url="http://72.61.251.114/authorswap-frontend/subscription",
+                    cancel_url="http://72.61.251.114/authorswap-frontend/subscription",
+                )
+                return Response({
+                    "requires_checkout": True,
+                    "url": checkout_session.url,
+                    "detail": "Your saved card was declined. Please use a different card via the checkout link.",
+                }, status=status.HTTP_200_OK)
 
             period_end = _safe_period_end(updated_sub)
             user_sub.tier = tier
@@ -3478,37 +3496,44 @@ class CreateSwapCheckoutSessionView(APIView):
             }
 
             if default_pm_id:
-                # ── User has a saved card → charge it directly ──
-                payment_intent = stripe.PaymentIntent.create(
-                    amount=int(slot_price * 100),  # Convert to cents
-                    currency='usd',
-                    customer=cust_id,
-                    payment_method=default_pm_id,
-                    confirm=True,
-                    off_session=True,  # Charge without user interaction
-                    metadata=metadata,
-                    description=f"Swap Request {swap_request.id} - {slot.preferred_genre} slot on {slot.send_date}",
-                )
+                try:
+                    # ── User has a saved card → charge it directly ──
+                    payment_intent = stripe.PaymentIntent.create(
+                        amount=int(slot_price * 100),  # Convert to cents
+                        currency='usd',
+                        customer=cust_id,
+                        payment_method=default_pm_id,
+                        confirm=True,
+                        off_session=True,  # Charge without user interaction
+                        metadata=metadata,
+                        description=f"Swap Request {swap_request.id} - {slot.preferred_genre} slot on {slot.send_date}",
+                    )
 
-                # Mark payment as completed
-                SwapPayment.objects.update_or_create(
-                    swap_request=swap_request,
-                    defaults={
-                        'payer': request.user,
-                        'amount': slot_price,
-                        'currency': 'USD',
-                        'stripe_payment_intent_id': payment_intent.id,
-                        'status': 'completed',
-                        'paid_at': timezone.now(),
-                    }
-                )
+                    # Mark payment as completed
+                    SwapPayment.objects.update_or_create(
+                        swap_request=swap_request,
+                        defaults={
+                            'payer': request.user,
+                            'amount': slot_price,
+                            'currency': 'USD',
+                            'stripe_payment_intent_id': payment_intent.id,
+                            'status': 'completed',
+                            'paid_at': timezone.now(),
+                        }
+                    )
 
-                return Response({
-                    'charged': True,
-                    'payment_done': True,
-                    'detail': 'Payment charged successfully using your saved card.',
-                    'payment_intent_id': payment_intent.id,
-                })
+                    return Response({
+                        'charged': True,
+                        'payment_done': True,
+                        'detail': 'Payment charged successfully using your saved card.',
+                        'payment_intent_id': payment_intent.id,
+                    })
+                except stripe.error.CardError:
+                    # Saved card failed or requires authentication → fall through to Checkout Session
+                    pass
+                except Exception as e:
+                    # Other errors (e.g. stale PM) → fall through to Checkout
+                    pass
 
             # ── No saved card → redirect user to Stripe Checkout to add one ──
             # Create Stripe Product and Price for this swap payment
@@ -4279,6 +4304,43 @@ class StripeWebhookView(APIView):
                 
                 return Response(status=status.HTTP_200_OK)
 
+            elif metadata.get('payment_type') == 'direct_payment':
+                # Handle direct payment completion
+                transaction_id = metadata.get('transaction_id')
+                payment_intent = session.get('payment_intent')
+                
+                logger.info(f"Processing direct payment for transaction_id: {transaction_id}")
+                
+                if transaction_id:
+                    try:
+                        from core.models import PaymentTransaction, UserWallet, Notification
+                        transaction = PaymentTransaction.objects.get(id=transaction_id)
+                        
+                        if transaction.status == 'pending':
+                            # Complete the transaction
+                            transaction.status = 'completed'
+                            transaction.stripe_payment_intent_id = payment_intent
+                            transaction.completed_at = timezone.now()
+                            transaction.save()
+                            
+                            # Add money to receiver's wallet
+                            receiver_wallet, _ = UserWallet.objects.get_or_create(user=transaction.receiver)
+                            receiver_wallet.add_balance(transaction.amount)
+                            
+                            # Notify the receiver
+                            Notification.objects.create(
+                                recipient=transaction.receiver,
+                                title="Money Received! 💰",
+                                badge="WALLET",
+                                message=f"{transaction.sender.username} has sent you ${transaction.amount}. Your wallet has been credited.",
+                                action_url=f"/dashboard/wallet/"
+                            )
+                            logger.info(f"Direct transaction {transaction.id} completed successfully via webhook")
+                    except Exception as e:
+                        logger.error(f"Webhook direct payment error: {e}")
+                
+                return Response(status=status.HTTP_200_OK)
+
             # ── Handle subscription checkout (original logic) ──
             # Retrieve the user ID from the client_reference_id
             user_id = session.get('client_reference_id')
@@ -4996,41 +5058,164 @@ class DirectPaymentView(APIView):
         
         # Check sender's wallet balance
         sender_wallet, created = UserWallet.objects.get_or_create(user=sender)
-        if sender_wallet.balance < amount:
+        
+        # Scenario A: User has enough balance in their internal wallet
+        if sender_wallet.balance >= amount:
+            # Create transaction
+            transaction = PaymentTransaction.objects.create(
+                sender=sender,
+                receiver=receiver,
+                amount=amount,
+                transaction_type='direct_payment',
+                description=description,
+                swap_request=swap_request
+            )
+            
+            try:
+                # Deduct from sender's wallet
+                sender_wallet.withdraw_balance(amount)
+                # Add to receiver's wallet and complete transaction
+                transaction.complete_transaction()
+                
+                return Response({
+                    'detail': 'Payment sent successfully from your wallet!',
+                    'payment_type': 'wallet',
+                    'transaction': PaymentTransactionSerializer(transaction, context={'request': request}).data,
+                    'new_balance': str(sender_wallet.balance)
+                })
+            except Exception as e:
+                transaction.status = 'failed'
+                transaction.save()
+                return Response({
+                    'detail': f'Wallet payment failed: {str(e)}'
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        # Scenario B: Wallet balance is low, try Stripe if configured
+        if not settings.STRIPE_SECRET_KEY:
             return Response({
-                'detail': 'Insufficient balance.',
+                'detail': 'Insufficient balance and Stripe is not configured.',
                 'current_balance': str(sender_wallet.balance)
             }, status=status.HTTP_400_BAD_REQUEST)
+
+        stripe.api_key = settings.STRIPE_SECRET_KEY.strip()
         
-        # Create transaction
-        transaction = PaymentTransaction.objects.create(
-            sender=sender,
-            receiver=receiver,
-            amount=amount,
-            transaction_type='direct_payment',
-            description=description,
-            swap_request=swap_request
-        )
-        
-        # Process the payment
         try:
-            # Deduct from sender's wallet
-            sender_wallet.withdraw_balance(amount)
+            # 1. Get/Create Stripe Customer
+            user_sub = getattr(sender, 'subscription', None)
+            cust_id = _get_or_create_stripe_customer(sender, user_sub)
             
-            # Add to receiver's wallet and complete transaction
-            transaction.complete_transaction()
+            # 2. Check for saved card
+            stripe_customer = stripe.Customer.retrieve(cust_id)
+            default_pm_id = stripe_customer.get('invoice_settings', {}).get('default_payment_method')
             
-            return Response({
-                'detail': 'Payment sent successfully!',
-                'transaction': PaymentTransactionSerializer(transaction, context={'request': request}).data,
-                'new_balance': str(sender_wallet.balance)
-            })
+            if not default_pm_id:
+                payment_methods = stripe.PaymentMethod.list(customer=cust_id, type='card')
+                if payment_methods.data:
+                    default_pm_id = payment_methods.data[0].id
             
-        except Exception as e:
-            transaction.status = 'failed'
+            # Metadata for tracking
+            metadata = {
+                'payment_type': 'direct_payment',
+                'sender_id': str(sender.id),
+                'receiver_id': str(receiver.id),
+                'amount': str(amount),
+                'description': description,
+                'swap_id': str(swap_request.id) if swap_request else ''
+            }
+
+            # 3. If card exists, try direct charge
+            if default_pm_id:
+                try:
+                    payment_intent = stripe.PaymentIntent.create(
+                        amount=int(amount * 100),
+                        currency='usd',
+                        customer=cust_id,
+                        payment_method=default_pm_id,
+                        confirm=True,
+                        off_session=True,
+                        metadata=metadata,
+                        description=f"Direct Payment to {receiver.username}: {description}"
+                    )
+                    
+                    # Create and complete transaction immediately
+                    transaction = PaymentTransaction.objects.create(
+                        sender=sender,
+                        receiver=receiver,
+                        amount=amount,
+                        transaction_type='direct_payment',
+                        description=description,
+                        status='completed',
+                        stripe_payment_intent_id=payment_intent.id,
+                        completed_at=timezone.now(),
+                        swap_request=swap_request
+                    )
+                    
+                    # Add balance to receiver
+                    receiver_wallet, _ = UserWallet.objects.get_or_create(user=receiver)
+                    receiver_wallet.add_balance(amount)
+                    
+                    return Response({
+                        'detail': 'Payment sent successfully using your saved card!',
+                        'payment_type': 'card',
+                        'transaction': PaymentTransactionSerializer(transaction, context={'request': request}).data,
+                        'new_balance': str(sender_wallet.balance) # Balance didn't change as it was external
+                    })
+                except (stripe.error.CardError, stripe.error.StripeError):
+                    # Card failed or needs authentication, fall through to Checkout
+                    pass
+
+            # 4. No card or direct charge failed, return Stripe Checkout URL
+            # Create a pending transaction to track this
+            transaction = PaymentTransaction.objects.create(
+                sender=sender,
+                receiver=receiver,
+                amount=amount,
+                transaction_type='direct_payment',
+                description=description,
+                status='pending',
+                swap_request=swap_request
+            )
+            metadata['transaction_id'] = str(transaction.id)
+
+            # Create session
+            checkout_session = stripe.checkout.Session.create(
+                payment_method_types=['card'],
+                line_items=[{
+                    'price_data': {
+                        'currency': 'usd',
+                        'product_data': {
+                            'name': f"Direct Payment to {receiver.username}",
+                            'description': description or "Support author collaboration",
+                        },
+                        'unit_amount': int(amount * 100),
+                    },
+                    'quantity': 1,
+                }],
+                mode='payment',
+                client_reference_id=str(sender.id),
+                customer=cust_id,
+                success_url=f"http://72.61.251.114/authorswap-frontend/wallet?success=true",
+                cancel_url=f"http://72.61.251.114/authorswap-frontend/wallet?cancel=true",
+                metadata=metadata,
+                payment_intent_data={'setup_future_usage': 'off_session'}
+            )
+            
+            # Update transaction with session ID
+            transaction.stripe_payment_intent_id = checkout_session.id # Re-using this field for session ID if pending
             transaction.save()
+
             return Response({
-                'detail': f'Payment failed: {str(e)}'
+                'detail': 'No sufficient balance or saved card. Please complete payment via Stripe.',
+                'payment_type': 'stripe_checkout',
+                'url': checkout_session.url,
+                'transaction_id': transaction.id
+            })
+
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"Direct Stripe Payment Error: {str(e)}")
+            return Response({
+                'detail': f'External payment failed: {str(e)}'
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
