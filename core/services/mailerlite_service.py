@@ -451,34 +451,6 @@ def sync_subscriber_analytics(user):
                             'type': 'Recent'
                         }
                     )
-
-                    # --- AUTOMATED REPUTATION: Automatic Swap Confirmation ---
-                    # Scan for any scheduled swaps that match this campaign's timeframe
-                    from core.models import SwapRequest
-                    from core.services.reputation_service import ReputationService
-                    from datetime import timedelta
-                    
-                    # Look for swaps scheduled within +/- 2 days of this campaign date
-                    swaps = SwapRequest.objects.filter(
-                        Q(slot__user=user) | Q(requester=user),
-                        status__in=['scheduled', 'sending'],
-                        scheduled_date__gte=date_val - timedelta(days=2),
-                        scheduled_date__lte=date_val + timedelta(days=2)
-                    )
-                    
-                    for swap in swaps:
-                        # Auto-complete the swap
-                        swap.status = 'completed'
-                        swap.tracking_number = camp.get('id')
-                        swap.shipped_at = date_val
-                        swap.completed_at = timezone.now()
-                        swap.save()
-                        
-                        # Award points automatically
-                        ReputationService.update_confirmed_sends(user)
-                        ReputationService.update_timeliness(user, is_fast=True)
-                        logger.info(f"[AUTO-REPUTATION] Confirmed Swap {swap.id} via MailerLite Sync")
-
                 except Exception as camp_e:
                     logger.error(f"[DIAGNOSTIC] Error processing campaign {camp.get('id')}: {camp_e}")
 

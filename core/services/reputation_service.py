@@ -3,56 +3,53 @@ from django.db.models import Q
 from core.models import Profile, SwapRequest
 
 class ReputationService:
-    """
-    The Automated Reputation Engine.
-    Handles automatic score calculation based on platform activity.
-    """
-
     @staticmethod
     def update_confirmed_sends(user):
         """
-        Calculates 'Confirmed Sends' score (Max 50 Pts).
-        Logic: +5 points for every swap marked as 'completed' or 'verified'.
+        Awards points based on the number of completed/verified swaps.
+        Max Points: 50 (10 swaps x 5 points each).
         """
         profile = user.profiles.first()
         if not profile:
             return
         
-        # Count all successfully finished swaps for this user
-        swaps_completed = user.sent_swap_requests.filter(status__in=['completed', 'verified']).count()
-        swaps_completed += SwapRequest.objects.filter(slot__user=user, status__in=['completed', 'verified']).count()
+        # Count swaps where the user was a partner and status is completed or verified
+        swaps_completed = SwapRequest.objects.filter(
+            Q(slot__user=user) | Q(requester=user),
+            status__in=['completed', 'verified']
+        ).count()
         
-        # Award 5 points per swap, capped at 50
+        # Calculate points (5 per swap, cap at 50)
         profile.confirmed_sends_score = min(50, swaps_completed * 5)
         
-        # Update success rate (%)
-        total_swaps = user.sent_swap_requests.exclude(status='rejected').count()
-        total_swaps += SwapRequest.objects.filter(slot__user=user).exclude(status='rejected').count()
+        # Calculate success rate
+        total_involvement = SwapRequest.objects.filter(
+            Q(slot__user=user) | Q(requester=user)
+        ).exclude(status='rejected').count()
         
-        if total_swaps > 0:
-            profile.confirmed_sends_success_rate = round((swaps_completed / total_swaps) * 100, 1)
+        if total_involvement > 0:
+            profile.confirmed_sends_success_rate = (swaps_completed / total_involvement) * 100.0
         
         profile.save()
         ReputationService.recalculate_total_score(profile)
 
     @staticmethod
-    def update_timeliness(user, is_fast=True):
+    def update_timeliness(user, is_ontime=True):
         """
-        Calculates 'Timeliness' score (Max 30 Pts).
-        Logic: Reward authors who send their promotions on the scheduled date.
+        Awards points for sending promotions on the scheduled date.
+        Max Points: 30.
         """
         profile = user.profiles.first()
         if not profile:
             return
         
-        if is_fast:
-            # Add points for a timely send (e.g., +3 per fast send)
+        if is_ontime:
+            # Add 3 points per timely send, max 30
             profile.timeliness_score = min(30, profile.timeliness_score + 3)
-            # Update moving average of success rate
-            profile.timeliness_success_rate = min(100.0, profile.timeliness_success_rate + 10.0)
+            # Impact on success rate (moving average)
+            profile.timeliness_success_rate = min(100.0, (profile.timeliness_success_rate * 0.8) + 20.0)
         else:
-            # Optional penalty or decrease for late sends
-            profile.timeliness_success_rate = max(0.0, profile.timeliness_success_rate - 5.0)
+            profile.timeliness_success_rate = profile.timeliness_success_rate * 0.8
             
         profile.save()
         ReputationService.recalculate_total_score(profile)
@@ -60,8 +57,8 @@ class ReputationService:
     @staticmethod
     def record_communication_response(user, request_created_at):
         """
-        Calculates 'Communication' score (Max 30 Pts).
-        Logic: Reward response times under 2 hours.
+        Updates communication score based on response time.
+        Target: < 2 hours response for 30 points.
         """
         profile = user.profiles.first()
         if not profile:
@@ -70,21 +67,21 @@ class ReputationService:
         now = timezone.now()
         response_time_hrs = (now - request_created_at).total_seconds() / 3600.0
         
-        # Update rolling average of response time
+        # Update moving average
         if profile.avg_response_time_hours == 0:
             profile.avg_response_time_hours = response_time_hrs
         else:
             profile.avg_response_time_hours = (profile.avg_response_time_hours * 0.7) + (response_time_hrs * 0.3)
             
-        # Target: Response within 2 hours = 30 pts. Drops to 0 at 24 hours.
+        # Points calculation (linear scale: 2h = 30pts, 24h = 0pts)
         if profile.avg_response_time_hours <= 2.0:
             profile.communication_score = 30
         elif profile.avg_response_time_hours >= 24.0:
             profile.communication_score = 0
         else:
-            # Linear decrease between 2h and 24h
-            reduction = (profile.avg_response_time_hours - 2.0) / (24.0 - 2.0)
-            profile.communication_score = int(30 * (1 - reduction))
+            penalty_range = 24.0 - 2.0
+            excess = profile.avg_response_time_hours - 2.0
+            profile.communication_score = int(30 * (1 - (excess / penalty_range)))
             
         profile.save()
         ReputationService.recalculate_total_score(profile)
@@ -92,8 +89,8 @@ class ReputationService:
     @staticmethod
     def apply_missed_send_penalty(user):
         """
-        Calculates 'Missed Sends' penalty (Deducts from 30 Pt base).
-        Logic: Penalize users who cancel scheduled swaps late or flake.
+        Deducts points for missed or flaked swaps.
+        Starts with a 30 point maintenance score.
         """
         profile = user.profiles.first()
         if not profile:
@@ -109,19 +106,18 @@ class ReputationService:
     @staticmethod
     def recalculate_total_score(profile):
         """
-        Final 0-100 Score Aggregation.
+        Sums up all breakdown scores to update the main 0-100 reputation score.
         """
-        # Missed sends starts at a baseline of 30 points and subtracts penalties
-        reliability_base = 30 + profile.missed_sends_penalty 
+        # Base reliability starts at 30 points
+        reliability_base = 30 + profile.missed_sends_penalty
         
-        raw_total = (
+        total_raw = (
             profile.confirmed_sends_score + 
             profile.timeliness_score + 
             profile.communication_score + 
             max(0, reliability_base)
         )
         
-        # Scale to 100 based on the 140 possible points (50+30+30+30)
-        # Higher weight to Confirmed Sends
-        profile.reputation_score = min(100.0, round((raw_total / 140.0) * 100.0, 1))
+        # Scale 130 max points down to 100
+        profile.reputation_score = min(100, int((total_raw / 130.0) * 100.0))
         profile.save()

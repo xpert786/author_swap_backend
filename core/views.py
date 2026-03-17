@@ -938,8 +938,6 @@ from core.services.mailerlite_service import (
 )
 
 
-from core.services.reputation_service import ReputationService
-
 class SwapManagementListView(APIView):
     """
     GET /api/swaps/
@@ -1050,9 +1048,6 @@ class AcceptSwapView(APIView):
         swap.status = 'scheduled'
         swap.save()
 
-        # AUTOMATED REPUTATION: Update Communication Score
-        ReputationService.record_communication_response(request.user, swap.created_at)
-
         # Update the slot's status if it has reached max capacity
         slot = swap.slot
         accepted_count = SwapRequest.objects.filter(
@@ -1109,9 +1104,6 @@ class RejectSwapView(APIView):
         swap.rejected_at = tz.now()
         swap.save()
 
-        # AUTOMATED REPUTATION: Update Communication Score
-        ReputationService.record_communication_response(request.user, swap.created_at)
-
         # MailerLite: move to Rejected group
         requester_email = swap.requester.email
         try:
@@ -1131,61 +1123,6 @@ class RejectSwapView(APIView):
         return Response({
             "detail": "Swap request declined.",
             "swap": SwapManagementSerializer(swap, context={'request': request}).data
-        })
-
-
-class MarkSwapSentView(APIView):
-    """
-    POST /api/swaps/<id>/mark-sent/
-    Body: { "tracking_number": "ML-998877" }
-    Author confirms they sent the newsletter.
-    This increases 'Confirmed Sends' and 'Timeliness' reputation scores.
-    """
-    permission_classes = [IsAuthenticated]
-
-    def post(self, request, pk):
-        try:
-            # User must be a participant in the swap
-            swap = SwapRequest.objects.get(pk=pk)
-            if swap.slot.user != request.user and swap.requester != request.user:
-                return Response({"detail": "You are not a partner in this swap."}, status=status.HTTP_403_FORBIDDEN)
-        except SwapRequest.DoesNotExist:
-            return Response({"detail": "Swap request not found."}, status=status.HTTP_404_NOT_FOUND)
-
-        tracking_number = request.data.get('tracking_number')
-        if not tracking_number:
-            return Response({"detail": "Tracking number or campaign ID is required."}, status=status.HTTP_400_BAD_REQUEST)
-
-        # Mark as completed
-        swap.status = 'completed'
-        swap.tracking_number = tracking_number
-        swap.shipped_at = tz.now()
-        swap.completed_at = tz.now()
-        swap.save()
-
-        # AUTOMATED REPUTATION: Award points
-        ReputationService.update_confirmed_sends(request.user)
-        
-        # Timeliness check: within 24h of scheduled_date
-        is_timely = True
-        if swap.scheduled_date:
-            deadline = swap.scheduled_date + timedelta(days=1)
-            is_timely = (tz.now().date() <= deadline)
-        ReputationService.update_timeliness(request.user, is_fast=is_timely)
-
-        # Notification for the other partner
-        partner = swap.requester if swap.slot.user == request.user else swap.slot.user
-        Notification.objects.create(
-            recipient=partner,
-            title="Swap Confirmed! 📧",
-            badge="SWAP",
-            message=f"{request.user.username} has confirmed sending their newsletter promo. Tracking: {tracking_number}.",
-            action_url=f"/dashboard/swaps/track/{swap.id}/"
-        )
-
-        return Response({
-            "detail": "Swap confirmed. Reputation points awarded.",
-            "status": "completed"
         })
 
 
@@ -1314,15 +1251,10 @@ class CancelSwapView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        old_status = swap.status
         swap.status = 'rejected'
         swap.rejection_reason = 'Cancelled by requester.'
         swap.rejected_at = tz.now()
         swap.save()
-
-        # AUTOMATED REPUTATION: Apply penalty if cancelled late
-        if old_status in ['scheduled', 'sending', 'confirmed']:
-            ReputationService.apply_missed_send_penalty(request.user)
 
         # Notification for slot owner
         from core.models import Notification
@@ -3789,17 +3721,25 @@ class ConfirmSwapPaymentView(APIView):
         # Get the payment record
         payment = getattr(swap_request, 'payment', None)
         if not payment:
-            return Response(
-                {'detail': 'No payment record found for this swap.'},
-                status=status.HTTP_400_BAD_REQUEST,
+            # If no payment record exists, but the receiver is manually confirming, 
+            # we create a 'placeholder' completed payment so the swap can finish.
+            from core.models import SwapPayment
+            from django.utils import timezone
+            payment = SwapPayment.objects.create(
+                swap_request=swap_request,
+                payer=swap_request.requester,
+                amount=swap_request.slot.price or 0,
+                status='completed',
+                paid_at=timezone.now(),
+                stripe_checkout_session_id="manual_confirmation"
             )
 
-        # Check if payment is completed
+        # Check if payment is completed (if it existed but was pending)
         if payment.status != 'completed':
-            return Response(
-                {'detail': 'Payment has not been completed yet.'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            from django.utils import timezone
+            payment.status = 'completed'
+            payment.paid_at = timezone.now()
+            payment.save(update_fields=['status', 'paid_at'])
 
         # Check if already confirmed
         if payment.receiver_confirmed:
@@ -3820,14 +3760,20 @@ class ConfirmSwapPaymentView(APIView):
 
         # Update swap status to completed
         swap_request.status = 'completed'
-        swap_request.save(update_fields=['status'])
+        swap_request.completed_at = timezone.now()
+        swap_request.save(update_fields=['status', 'completed_at'])
+
+        # AWARD REPUTATION POINTS
+        from core.services.reputation_service import ReputationService
+        ReputationService.update_confirmed_sends(swap_request.requester) # The person who paid
+        ReputationService.update_confirmed_sends(swap_request.slot.user) # The person who received
 
         # Create notification for payer
         Notification.objects.create(
             recipient=swap_request.requester,
-            title="Payment Confirmed ✅",
+            title="Payment Confirmed & Swap Completed! ✅",
             badge="SWAP",
-            message=f"{request.user.username} has confirmed receipt of your payment for the swap.",
+            message=f"{request.user.username} has confirmed receipt of your payment. The swap is now officially completed!",
             action_url=f"/dashboard/swaps/track/{swap_request.id}/"
         )
 
