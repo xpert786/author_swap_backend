@@ -245,6 +245,10 @@ class SwapRequest(models.Model):
     
     # Completion
     completed_at = models.DateTimeField(blank=True, null=True)
+    
+    # Tracking for Reputation (New)
+    tracking_number = models.CharField(max_length=100, blank=True, null=True, help_text="Campaign ID or Send confirmation ID")
+    shipped_at = models.DateTimeField(blank=True, null=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
 

@@ -7,11 +7,31 @@ from .models import (
 )
 
 # Basic Registrations
-admin.site.register(Profile)
 admin.site.register(Notification)
 admin.site.register(Book)
 admin.site.register(SubscriberVerification)
 admin.site.register(SubscriberGrowth)
+
+
+@admin.register(Profile)
+class ProfileAdmin(admin.ModelAdmin):
+    list_display = ['user', 'reputation_score', 'confirmed_sends_score', 'communication_score', 'timeliness_score']
+    search_fields = ['user__username', 'name']
+    readonly_fields = ['reputation_score']
+    fieldsets = (
+        ('Basic Info', {
+            'fields': ('user', 'name', 'profile_picture', 'bio')
+        }),
+        ('Reputation Scores', {
+            'fields': (
+                'reputation_score', 
+                'confirmed_sends_score', 'confirmed_sends_success_rate',
+                'timeliness_score', 'timeliness_success_rate',
+                'communication_score', 'avg_response_time_hours',
+                'missed_sends_count', 'missed_sends_penalty'
+            )
+        }),
+    )
 
 
 @admin.register(NewsletterSlot)
@@ -22,9 +42,10 @@ class NewsletterSlotAdmin(admin.ModelAdmin):
 
 @admin.register(SwapRequest)
 class SwapRequestAdmin(admin.ModelAdmin):
-    list_display = ['requester', 'slot', 'status', 'created_at']
-    list_filter = ['status']
-    search_fields = ['requester__username', 'slot__user__username']
+    list_display = ['id', 'requester', 'slot', 'status', 'tracking_number', 'shipped_at', 'created_at']
+    list_filter = ['status', 'shipped_at']
+    search_fields = ['requester__username', 'slot__user__username', 'tracking_number']
+    readonly_fields = ['created_at']
 
 @admin.register(SubscriptionTier)
 class SubscriptionTierAdmin(admin.ModelAdmin):
