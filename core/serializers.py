@@ -388,33 +388,20 @@ class SwapManagementSerializer(serializers.ModelSerializer):
         if request and obj.status == 'pending' and obj.requester_id == request.user.id:
             return 'sending'
             
-        is_paid = False
-        if obj.slot:
-            prom_type = str(obj.slot.promotion_type).lower() if obj.slot.promotion_type else ''
-            price_val = obj.slot.price or 0
-            if prom_type == 'paid' or price_val > 0:
-                is_paid = True
+        is_paid_slot = self.get_eligible_for_pay(obj)
+        payment_is_done = self.get_payment_done(obj)
         
-        # For paid swaps, check if payment is completed
-        if is_paid:
-            payment = getattr(obj, 'payment', None)
-            if obj.status in ['confirmed', 'completed', 'scheduled']:
-                # Only show as 'completed' if payment is done AND scheduled_date has passed
-                if payment and payment.status == 'completed':
-                    from django.utils import timezone
-                    # Check if scheduled_date has passed
-                    if obj.scheduled_date and obj.scheduled_date <= timezone.now().date():
-                        return 'completed'
-                    # Otherwise, remain as scheduled until newsletter date
-                    return 'scheduled'
-                # Otherwise show as 'scheduled' (payment pending)
-                return 'scheduled'
+        # If it's a paid swap, and payment is NOT done, it MUST stay as 'scheduled' or 'payment_pending'
+        if is_paid_slot and not payment_is_done:
+            # The user requested to keep it as 'scheduled' but indicated payment not completed
+            return 'scheduled'
         
-        # For non-paid swaps, check scheduled_date
-        if obj.status in ['confirmed', 'completed', 'scheduled']:
+        # For non-paid swaps, or paid swaps where payment is done, check scheduled_date
+        if obj.status in ['confirmed', 'completed', 'scheduled', 'verified']:
             from django.utils import timezone
+            # If the scheduled date has passed, show as 'completed' (or verified if really finished)
             if obj.scheduled_date and obj.scheduled_date <= timezone.now().date():
-                return 'completed'
+                return 'completed' if obj.status != 'verified' else 'verified'
             return 'scheduled'
             
         return obj.status
@@ -430,22 +417,28 @@ class SwapManagementSerializer(serializers.ModelSerializer):
         return float(obj.slot.price) if obj.slot and obj.slot.price else 0.00
 
     def get_payment_done(self, obj):
-        # For paid slots, payment is only 'done' if there's a completed SwapPayment record
         if not obj.slot:
             return False
             
-        prom_type = str(obj.slot.promotion_type).lower() if obj.slot.promotion_type else ''
-        price_val = obj.slot.price or 0
-        is_paid = prom_type == 'paid' or price_val > 0
-        
-        if not is_paid:
+        is_paid_slot = self.get_eligible_for_pay(obj)
+        if not is_paid_slot:
             return False
         
-        # For paid slots, ONLY check for actual SwapPayment record with status='completed'
-        # Do NOT use swap status as a fallback - that causes false positives
+        # 1. Check for actual SwapPayment record with status='completed'
         payment = getattr(obj, 'payment', None)
         if payment and payment.status == 'completed':
             return True
+            
+        # 2. NEW: Check if the requester has an active platform subscription (Plan subscibed check)
+        # If they are on a paid plan, individual swap payments might be covered.
+        try:
+            from core.models import UserSubscription
+            from django.utils import timezone
+            sub = UserSubscription.objects.get(user=obj.requester)
+            if sub.is_active and sub.active_until >= timezone.now().date():
+                return True
+        except:
+            pass
         
         return False
 
