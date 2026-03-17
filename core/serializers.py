@@ -346,8 +346,8 @@ class SwapManagementSerializer(serializers.ModelSerializer):
     """
     status = serializers.SerializerMethodField()
     # Author info (the person who SENT the request)
-    author_id = serializers.SerializerMethodField()
     sender_id = serializers.SerializerMethodField()
+    receiver_id = serializers.SerializerMethodField()
     author_name = serializers.SerializerMethodField()
     sender_name = serializers.SerializerMethodField()
     author_genre_label = serializers.SerializerMethodField()
@@ -375,7 +375,7 @@ class SwapManagementSerializer(serializers.ModelSerializer):
         model = SwapRequest
         fields = [
             'id', 'status', 'message', 'created_at',
-            'author_id', 'sender_id', 'author_name', 'sender_name', 
+            'author_id', 'sender_id', 'receiver_id', 'author_name', 'sender_name', 
             'author_genre_label', 'profile_picture',
             'audience_size', 'reliability_score',
             'requesting_book',
@@ -469,11 +469,17 @@ class SwapManagementSerializer(serializers.ModelSerializer):
         return obj.requester
 
     def get_author_id(self, obj):
+        # Keeping for backward compatibility or general partner reference
         partner = self.get_partner_user(obj)
         return partner.id
 
     def get_sender_id(self, obj):
+        # Always the one who CREATED the request
         return obj.requester_id
+        
+    def get_receiver_id(self, obj):
+        # Always the one who OWNS the slot
+        return obj.slot.user_id if obj.slot else None
 
     def get_author_name(self, obj):
         partner = self.get_partner_user(obj)
