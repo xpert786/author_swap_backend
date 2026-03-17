@@ -5058,9 +5058,10 @@ class DirectPaymentView(APIView):
         
         # Check sender's wallet balance
         sender_wallet, created = UserWallet.objects.get_or_create(user=sender)
-        
-        # Scenario A: User has enough balance in their internal wallet
-        if sender_wallet.balance >= amount:
+        payment_method = request.data.get('payment_method', 'wallet')
+
+        # Scenario A: User has enough balance in their internal wallet AND didn't force stripe
+        if sender_wallet.balance >= amount and payment_method != 'stripe':
             # Create transaction
             transaction = PaymentTransaction.objects.create(
                 sender=sender,
@@ -5194,8 +5195,8 @@ class DirectPaymentView(APIView):
                 mode='payment',
                 client_reference_id=str(sender.id),
                 customer=cust_id,
-                success_url=f"http://72.61.251.114/authorswap-frontend/wallet?success=true",
-                cancel_url=f"http://72.61.251.114/authorswap-frontend/wallet?cancel=true",
+                success_url=f"http://72.61.251.114/authorswap-frontend/swap-management",
+                cancel_url=f"http://72.61.251.114/authorswap-frontend/swap-management",
                 metadata=metadata,
                 payment_intent_data={'setup_future_usage': 'off_session'}
             )
