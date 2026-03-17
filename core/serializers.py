@@ -1464,12 +1464,14 @@ class PaymentTransactionSerializer(serializers.ModelSerializer):
     receiver_profile = serializers.SerializerMethodField()
     
     amount = serializers.SerializerMethodField()
+    amount_color = serializers.SerializerMethodField()
+    description = serializers.SerializerMethodField()
     
     class Meta:
         model = PaymentTransaction
         fields = [
             'id', 'sender', 'receiver', 'sender_name', 'receiver_name',
-            'sender_profile', 'receiver_profile', 'amount', 'transaction_type',
+            'sender_profile', 'receiver_profile', 'amount', 'amount_color', 'transaction_type',
             'status', 'description', 'created_at', 'completed_at',
             'stripe_payment_intent_id', 'stripe_transfer_id'
         ]
@@ -1482,6 +1484,26 @@ class PaymentTransactionSerializer(serializers.ModelSerializer):
             
         # Everything else (direct payments, etc.) shows as positive
         return str(obj.amount)
+
+    def get_amount_color(self, obj):
+        # Withdrawals are red
+        if obj.transaction_type == 'withdrawal':
+            return 'red'
+        # Everything else can be green
+        return 'green'
+
+    def get_description(self, obj):
+        desc = obj.description
+        # If the description contains a Swap ID, we improve it by showing the receiver's name instead of just the number
+        # Example: "Internal payment for Swap ID: 119" -> "Internal payment for jkrowling"
+        if obj.receiver and "Swap ID:" in desc:
+            try:
+                # Part before "Swap ID:"
+                base_desc = desc.split("Swap ID:")[0].strip()
+                return f"{base_desc} for {obj.receiver.username}"
+            except:
+                return desc
+        return desc
     
     def get_sender_profile(self, obj):
         if obj.sender:

@@ -5105,14 +5105,12 @@ class DirectPaymentView(APIView):
             user_sub = getattr(sender, 'subscription', None)
             cust_id = _get_or_create_stripe_customer(sender, user_sub)
             
-            # 2. Check for saved card
+            # 2. Check for saved default card
             stripe_customer = stripe.Customer.retrieve(cust_id)
             default_pm_id = stripe_customer.get('invoice_settings', {}).get('default_payment_method')
             
-            if not default_pm_id:
-                payment_methods = stripe.PaymentMethod.list(customer=cust_id, type='card')
-                if payment_methods.data:
-                    default_pm_id = payment_methods.data[0].id
+            # The User explicitly wants to use ONLY the default card.
+            # No fallback to payment_methods.data[0].id here.
             
             # Metadata for tracking
             metadata = {
@@ -5254,6 +5252,23 @@ class WithdrawFundsView(APIView):
         # Get user's wallet
         wallet, created = UserWallet.objects.get_or_create(user=user)
         
+        # Check if user has a default payment method set in Stripe
+        # This is where the funds would theoretically be withdrawn to (Card or Bank)
+        stripe.api_key = settings.STRIPE_SECRET_KEY.strip()
+        from core.views import _get_stripe_customer_id
+        cust_id = _get_stripe_customer_id(user)
+        
+        if not cust_id:
+            return Response({
+                'detail': 'No Stripe account found. Please link a payment method first.'
+            }, status=status.HTTP_400_BAD_REQUEST)
+            
+        stripe_customer = stripe.Customer.retrieve(cust_id)
+        if not stripe_customer.get('invoice_settings', {}).get('default_payment_method'):
+            return Response({
+                'detail': 'No default withdrawal card set. Please set a default card in your payment settings.'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
         if wallet.balance < amount:
             return Response({
                 'detail': 'Insufficient balance.',
