@@ -1437,7 +1437,7 @@ class SubscriberAnalyticsView(APIView):
         
         # DEBUG: Force refresh from database
         from core.models import SubscriberVerification
-        verification = SubscriberVerification.objects.get(user=request.user)
+        verification, created = SubscriberVerification.objects.get_or_create(user=request.user)
         print(f"[DEBUG] Before sync - active_subscribers: {verification.active_subscribers}, audience_size: {verification.audience_size}")
         
         # Trigger real-time sync (this calls get_subscriber_counts_by_status and updates the model)

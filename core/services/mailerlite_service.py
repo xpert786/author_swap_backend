@@ -19,7 +19,7 @@ def _get_headers(api_key=None):
     if not api_key:
         return {}, False
         
-    is_new = api_key.startswith("mlsn.")
+    is_new = api_key.startswith("mlsn.") or api_key.startswith("eyJ")
     if is_new:
         return {
             "Content-Type": "application/json",
@@ -390,8 +390,16 @@ def sync_subscriber_analytics(user):
         logger.info(f"[DIAGNOSTIC] Using API key from user verification for user {user.username}")
     
     headers, is_new_api = _get_headers(api_key)
-    if not headers or not verification.is_connected_mailerlite:
-        # Simulation if no real sync possible
+    
+    # If we have headers but the flag is False, it means the user added the key manually in Admin.
+    # We should trust the key and set the connected flag to True.
+    if headers and not verification.is_connected_mailerlite:
+        verification.is_connected_mailerlite = True
+        verification.save(update_fields=['is_connected_mailerlite'])
+        logger.info(f"[DIAGNOSTIC] Auto-activated MailerLite connection for user {user.username} (key found)")
+
+    if not headers:
+        # Simulation if no API key is available at all
         verification.avg_open_rate = round(max(30, min(60, verification.avg_open_rate + random.uniform(-0.5, 0.5))), 1)
         verification.avg_click_rate = round(max(5, min(15, verification.avg_click_rate + random.uniform(-0.1, 0.1))), 1)
         verification.last_verified_at = timezone.now()
