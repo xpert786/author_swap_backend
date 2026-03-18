@@ -439,7 +439,7 @@ class SwapManagementSerializer(serializers.ModelSerializer):
         except:
             pass # No payment record, but check transactions next
 
-        # 2. Fallback check: check for any successful transaction record
+        # 2. Fallback check: check for any successful transaction record linked to this swap
         from core.models import PaymentTransaction
         tx_exists = PaymentTransaction.objects.filter(
             swap_request=obj, 
@@ -449,6 +449,31 @@ class SwapManagementSerializer(serializers.ModelSerializer):
         if tx_exists:
             # If a successful transaction exists, we should trust it
             return True
+        
+        # 3. Third fallback: check for ANY completed transaction between these users for this amount
+        # This catches payments that weren't properly linked to the swap
+        try:
+            from decimal import Decimal
+            price_decimal = Decimal(str(obj.slot.price))
+            
+            # Find transactions between swap participants for the slot price
+            # Where sender is the requester (payer) and receiver is slot owner
+            unlinked_tx = PaymentTransaction.objects.filter(
+                sender=obj.requester,
+                receiver=obj.slot.user,
+                amount=price_decimal,
+                status='completed',
+                swap_request__isnull=True  # Not linked to any swap yet
+            ).first()
+            
+            if unlinked_tx:
+                # Auto-link this transaction to the swap for future queries
+                unlinked_tx.swap_request = obj
+                unlinked_tx.save()
+                return True
+                
+        except Exception:
+            pass  # Ignore any errors in this fallback
 
         return False
 

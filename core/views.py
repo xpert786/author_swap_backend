@@ -5039,7 +5039,7 @@ class DirectPaymentView(APIView):
         
         # 3. Auto-detect swap request if not already found
         # Look for pending/scheduled swap requests where receiver is the slot owner (to be paid)
-        if not swap_request and receiver:
+        if not swap_request and receiver and sender:
             from django.db.models import Q
             try:
                 # Find swap requests where:
@@ -5047,14 +5047,35 @@ class DirectPaymentView(APIView):
                 # - Receiver is the slot owner (getting paid)
                 # - Status indicates payment is expected
                 # - Slot is a paid slot (either promotion_type='paid' OR price > 0)
-                swap_request = SwapRequest.objects.filter(
-                    Q(requester=sender, slot__user=receiver) |
-                    Q(requester=receiver, slot__user=sender)
-                ).filter(
-                    status__in=['pending', 'scheduled', 'confirmed']
-                ).filter(
-                    Q(slot__promotion_type='paid') | Q(slot__price__gt=0)
-                ).select_related('slot').first()
+                
+                # Build the query
+                base_query = SwapRequest.objects.filter(
+                    status__in=['pending', 'scheduled', 'confirmed', 'accepted'],
+                    slot__price__gt=0
+                ).select_related('slot', 'requester')
+                
+                # Try to find swap where sender is requester and receiver is slot owner
+                swap_candidates = base_query.filter(
+                    requester=sender,
+                    slot__user=receiver
+                )
+                
+                # If not found, try the reverse (sender is slot owner, receiver is requester)
+                if not swap_candidates.exists():
+                    swap_candidates = base_query.filter(
+                        requester=receiver,
+                        slot__user=sender
+                    )
+                
+                # Get the first matching swap
+                swap_request = swap_candidates.first()
+                
+                if swap_request:
+                    import logging
+                    logging.getLogger(__name__).info(
+                        f"Auto-detected swap {swap_request.id} for payment from {sender.username} to {receiver.username}"
+                    )
+                    
             except Exception as e:
                 import logging
                 logging.getLogger(__name__).error(f"Swap auto-detect error: {str(e)}")
@@ -5442,8 +5463,8 @@ class AddFundsView(APIView):
                 mode='payment',
                 client_reference_id=str(user.id),
                 customer=cust_id,
-                success_url=f"http://72.61.251.114/authorswap-frontend/wallet?payment=success",
-                cancel_url=f"http://72.61.251.114/authorswap-frontend/wallet?payment=cancelled",
+                success_url=f"http://72.61.251.114/authorswap-frontend/account-settings",
+                cancel_url=f"http://72.61.251.114/authorswap-frontend/account-settings",
                 metadata={
                     'transaction_id': str(transaction.id),
                     'transaction_type': 'wallet_funding',
