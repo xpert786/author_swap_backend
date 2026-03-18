@@ -1106,9 +1106,20 @@ class AuthorReputationSerializer(serializers.ModelSerializer):
 
 
 class SubscriberGrowthSerializer(serializers.ModelSerializer):
+    count = serializers.SerializerMethodField()
+    
     class Meta:
         model = SubscriberGrowth
         fields = '__all__'
+    
+    def get_count(self, obj):
+        # Return active subscriber count instead of total count
+        from core.models import SubscriberVerification
+        try:
+            verification = SubscriberVerification.objects.get(user=obj.user)
+            return verification.active_subscribers
+        except SubscriberVerification.DoesNotExist:
+            return obj.count  # Fallback to original count
 
 
 class CampaignAnalyticSerializer(serializers.ModelSerializer):
