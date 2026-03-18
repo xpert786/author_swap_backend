@@ -5252,6 +5252,30 @@ class DirectPaymentView(APIView):
                     receiver_wallet, _ = UserWallet.objects.get_or_create(user=receiver)
                     receiver_wallet.add_balance(amount)
                     
+                    # Update swap status if this is a swap payment
+                    if swap_request and swap_request.status in ['scheduled', 'confirmed']:
+                        swap_request.status = 'completed'
+                        swap_request.completed_at = timezone.now()
+                        swap_request.save()
+                        
+                        # Create notifications for swap completion
+                        from core.models import Notification
+                        Notification.objects.create(
+                            recipient=swap_request.requester,
+                            title="✅ Swap Completed!",
+                            badge="SWAP",
+                            message=f"Your swap with {swap_request.slot.user.username} has been completed successfully.",
+                            action_url=f"/dashboard/swaps/track/{swap_request.id}/"
+                        )
+                        
+                        Notification.objects.create(
+                            recipient=swap_request.slot.user,
+                            title="✅ Swap Completed!",
+                            badge="SWAP",
+                            message=f"Your swap with {swap_request.requester.username} has been completed successfully.",
+                            action_url=f"/dashboard/swaps/track/{swap_request.id}/"
+                        )
+                    
                     return Response({
                         'detail': 'Payment sent successfully using your saved card!',
                         'payment_type': 'card',
