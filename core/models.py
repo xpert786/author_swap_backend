@@ -528,12 +528,19 @@ class PaymentTransaction(models.Model):
                 
                 # Update swap status if this is a swap payment
                 if self.swap_request:
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.info(f"Transaction completed for swap {self.swap_request.id}, current status: {self.swap_request.status}")
+                    
                     swap = self.swap_request
                     # Update swap status to completed if payment is done
-                    if swap.status in ['scheduled', 'confirmed']:
+                    if swap.status in ['pending', 'scheduled', 'confirmed', 'accepted']:
+                        old_status = swap.status
                         swap.status = 'completed'
                         swap.completed_at = timezone.now()
                         swap.save()
+                        
+                        logger.info(f"Swap {swap.id} status updated from {old_status} to completed")
                         
                         # Create notification for swap completion
                         Notification.objects.create(
@@ -551,6 +558,8 @@ class PaymentTransaction(models.Model):
                             message=f"Your swap with {swap.requester.username} has been completed successfully.",
                             action_url=f"/dashboard/swaps/track/{swap.id}/"
                         )
+                    else:
+                        logger.warning(f"Swap {swap.id} not updated - status {swap.status} not in allowed list")
             
             # Create notification for sender - payment sent/deducted
             if self.sender and self.transaction_type != 'withdrawal':

@@ -5253,28 +5253,38 @@ class DirectPaymentView(APIView):
                     receiver_wallet.add_balance(amount)
                     
                     # Update swap status if this is a swap payment
-                    if swap_request and swap_request.status in ['scheduled', 'confirmed']:
-                        swap_request.status = 'completed'
-                        swap_request.completed_at = timezone.now()
-                        swap_request.save()
+                    if swap_request:
+                        import logging
+                        logger = logging.getLogger(__name__)
+                        logger.info(f"Payment completed for swap {swap_request.id}, current status: {swap_request.status}")
                         
-                        # Create notifications for swap completion
-                        from core.models import Notification
-                        Notification.objects.create(
-                            recipient=swap_request.requester,
-                            title="✅ Swap Completed!",
-                            badge="SWAP",
-                            message=f"Your swap with {swap_request.slot.user.username} has been completed successfully.",
-                            action_url=f"/dashboard/swaps/track/{swap_request.id}/"
-                        )
-                        
-                        Notification.objects.create(
-                            recipient=swap_request.slot.user,
-                            title="✅ Swap Completed!",
-                            badge="SWAP",
-                            message=f"Your swap with {swap_request.requester.username} has been completed successfully.",
-                            action_url=f"/dashboard/swaps/track/{swap_request.id}/"
-                        )
+                        if swap_request.status in ['pending', 'scheduled', 'confirmed', 'accepted']:
+                            old_status = swap_request.status
+                            swap_request.status = 'completed'
+                            swap_request.completed_at = timezone.now()
+                            swap_request.save()
+                            
+                            logger.info(f"Swap {swap_request.id} status updated from {old_status} to completed")
+                            
+                            # Create notifications for swap completion
+                            from core.models import Notification
+                            Notification.objects.create(
+                                recipient=swap_request.requester,
+                                title="✅ Swap Completed!",
+                                badge="SWAP",
+                                message=f"Your swap with {swap_request.slot.user.username} has been completed successfully.",
+                                action_url=f"/dashboard/swaps/track/{swap_request.id}/"
+                            )
+                            
+                            Notification.objects.create(
+                                recipient=swap_request.slot.user,
+                                title="✅ Swap Completed!",
+                                badge="SWAP",
+                                message=f"Your swap with {swap_request.requester.username} has been completed successfully.",
+                                action_url=f"/dashboard/swaps/track/{swap_request.id}/"
+                            )
+                        else:
+                            logger.warning(f"Swap {swap_request.id} not updated - status {swap_request.status} not in allowed list")
                     
                     return Response({
                         'detail': 'Payment sent successfully using your saved card!',
