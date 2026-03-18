@@ -427,21 +427,12 @@ class SwapManagementSerializer(serializers.ModelSerializer):
         if not is_paid_slot:
             return False
         
-        # 1. Check for actual SwapPayment record with status='completed'
-        payment = getattr(obj, 'payment', None)
-        if payment and payment.status == 'completed':
-            return True
-            
-        # 2. NEW: Check if the requester has an active platform subscription (Plan subscibed check)
-        # If they are on a paid plan, individual swap payments might be covered.
+        # 2. Check for actual SwapPayment record with status='completed'
         try:
-            from core.models import UserSubscription
-            from django.utils import timezone
-            sub = UserSubscription.objects.get(user=obj.requester)
-            if sub.is_active and sub.active_until >= timezone.now().date():
-                return True
+            payment = obj.payment
+            return payment.status == 'completed'
         except:
-            pass
+            return False
         
         return False
 
