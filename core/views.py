@@ -98,7 +98,7 @@ class AudienceSizeView(APIView):
     def get(self, request):
         verification, _ = SubscriberVerification.objects.get_or_create(user=request.user)
         return Response({
-            "audience_size": verification.audience_size,
+            "active_audience_size": verification.active_subscribers,
             "is_connected": verification.is_connected_mailerlite,
             "last_verified": verification.last_verified_at
         }, status=status.HTTP_200_OK)
