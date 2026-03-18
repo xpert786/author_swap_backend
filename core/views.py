@@ -834,6 +834,16 @@ class RequestSwapPlacementView(APIView):
             message=message
         )
         
+        # If auto-approved, check if slot should be marked as booked
+        if initial_status == 'confirmed':
+            accepted_count = SwapRequest.objects.filter(
+                slot=slot, 
+                status__in=['completed', 'confirmed', 'verified', 'scheduled']
+            ).count()
+            if accepted_count >= slot.max_partners:
+                slot.status = 'booked'
+                slot.save(update_fields=['status'])
+        
         # MailerLite Notification
         if initial_status == 'pending':
             from core.services.mailerlite_service import send_swap_request_notification
@@ -1112,6 +1122,17 @@ class RejectSwapView(APIView):
         swap.rejection_reason = request.data.get('rejection_reason', request.data.get('reason', ''))
         swap.rejected_at = tz.now()
         swap.save()
+        
+        # Revert slot status to available if it was booked and now has room
+        slot = swap.slot
+        if slot.status == 'booked':
+            accepted_count = SwapRequest.objects.filter(
+                slot=slot, 
+                status__in=['completed', 'confirmed', 'verified', 'scheduled']
+            ).count()
+            if accepted_count < slot.max_partners:
+                slot.status = 'available'
+                slot.save(update_fields=['status'])
 
         # MailerLite: move to Rejected group
         requester_email = swap.requester.email
@@ -1264,6 +1285,17 @@ class CancelSwapView(APIView):
         swap.rejection_reason = 'Cancelled by requester.'
         swap.rejected_at = tz.now()
         swap.save()
+        
+        # Revert slot status to available if it was booked and now has room
+        slot = swap.slot
+        if slot.status == 'booked':
+            accepted_count = SwapRequest.objects.filter(
+                slot=slot, 
+                status__in=['completed', 'confirmed', 'verified', 'scheduled']
+            ).count()
+            if accepted_count < slot.max_partners:
+                slot.status = 'available'
+                slot.save(update_fields=['status'])
 
         # Notification for slot owner
         from core.models import Notification
