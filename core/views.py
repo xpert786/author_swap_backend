@@ -292,6 +292,11 @@ class NewsletterStatsView(APIView):
             all_slots = all_slots.filter(status=status_filter.lower())
 
         # --- 1. TOP STATS CARDS DATA (filtered) ---
+        # Confirmed = agreed & scheduled (but not yet sent): confirmed, scheduled, accepted
+        confirmed_statuses = ['confirmed', 'scheduled', 'accepted', 'active']
+        # Verified = sent & proven via ESP: verified, completed, sent
+        verified_statuses = ['verified', 'completed', 'sent']
+        
         stats = {
             "total": all_slots.count(),
             "published_slots": all_slots.filter(visibility='public').count(),
@@ -299,16 +304,20 @@ class NewsletterStatsView(APIView):
                 slot__in=all_slots, status='pending'
             ).count(),
             "confirmed_swaps": SwapRequest.objects.filter(
-                slot__in=all_slots, status='confirmed'
+                slot__in=all_slots, status__in=confirmed_statuses
             ).count(),
             "verified_sent": SwapRequest.objects.filter(
-                slot__in=all_slots, status='verified'
+                slot__in=all_slots, status__in=verified_statuses
             ).count()
         }
 
         # --- 2. CALENDAR DATA (filtered) ---
         calendar_data = []
         num_days = calendar.monthrange(year, month)[1]
+        
+        # Status definitions for swap lifecycle
+        confirmed_statuses = ['confirmed', 'scheduled', 'accepted', 'active']
+        verified_statuses = ['verified', 'completed', 'sent']
 
         slots_in_month = all_slots.filter(
             send_date__year=year, 
@@ -316,8 +325,8 @@ class NewsletterStatsView(APIView):
         ).values('send_date', 'visibility', 'status').annotate(
             total=Count('id'),
             pending=Count('swap_requests', filter=Q(swap_requests__status='pending')),
-            confirmed=Count('swap_requests', filter=Q(swap_requests__status='confirmed')),
-            verified=Count('swap_requests', filter=Q(swap_requests__status='verified'))
+            confirmed=Count('swap_requests', filter=Q(swap_requests__status__in=confirmed_statuses)),
+            verified=Count('swap_requests', filter=Q(swap_requests__status__in=verified_statuses))
         )
 
         # Build lookup: one date can have multiple slots, so aggregate
