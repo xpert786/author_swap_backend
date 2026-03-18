@@ -479,7 +479,7 @@ def sync_subscriber_analytics(user):
                 user=user,
                 month=current_month_name,
                 year=current_date.year,
-                defaults={'count': verification.audience_size}
+                defaults={'count': verification.active_subscribers}
             )
             
             # Update average rates from latest campaigns
