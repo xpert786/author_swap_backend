@@ -410,12 +410,14 @@ def sync_subscriber_analytics(user):
             
             for camp in campaigns_list:
                 try:
+                    logger.info(f"[DIAGNOSTIC] Processing campaign: {camp}")
+                    
                     if is_new_api:
                         name = camp.get('subject') or camp.get('name')
-                        date_str = camp.get('sent_at') or camp.get('created_at')
-                        subs = camp.get('total_recipients', 0)
-                        open_r = camp.get('open_rate_percent', 0.0) or camp.get('open_rate', 0.0)
-                        click_r = camp.get('click_rate_percent', 0.0) or camp.get('click_rate', 0.0)
+                        date_str = camp.get('sent_at') or camp.get('created_at') or camp.get('send_time')
+                        subs = camp.get('total_recipients', 0) or camp.get('recipients_count', 0) or camp.get('emails_sent', 0)
+                        open_r = camp.get('open_rate_percent', 0.0) or camp.get('open_rate', 0.0) or camp.get('opens_count', 0)
+                        click_r = camp.get('click_rate_percent', 0.0) or camp.get('click_rate', 0.0) or camp.get('clicks_count', 0)
                     else:
                         # Classic sent campaigns mapping
                         name = camp.get('subject') or camp.get('name') or "Untitled Campaign"
@@ -432,6 +434,8 @@ def sync_subscriber_analytics(user):
                             # Fallback to direct rate fields
                             open_r = camp.get('opened_rate', 0.0) or camp.get('open_rate', 0.0)
                             click_r = camp.get('clicked_rate', 0.0) or camp.get('click_rate', 0.0)
+                    
+                    logger.info(f"[DIAGNOSTIC] Parsed: name={name}, subs={subs}, open_r={open_r}, click_r={click_r}")
                     
                     # Parse date string properly
                     date_val = timezone.now().date()
@@ -464,7 +468,9 @@ def sync_subscriber_analytics(user):
                                 'type': 'Recent'
                             }
                         )
-                        logger.info(f"[DIAGNOSTIC] Saved campaign: {name} ({subs} subscribers, {open_r}% open)")
+                        logger.info(f"[DIAGNOSTIC] ✅ Saved campaign: {name} ({subs} subscribers, {open_r}% open)")
+                    else:
+                        logger.warning(f"[DIAGNOSTIC] ❌ Skipped campaign: name={name}, subs={subs}")
                     
                 except Exception as camp_e:
                     logger.error(f"[DIAGNOSTIC] Error processing campaign {camp.get('id')}: {camp_e}")

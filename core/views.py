@@ -1513,7 +1513,7 @@ class SubscriberAnalyticsView(APIView):
         verification.refresh_from_db()
         
         growth_data = SubscriberGrowth.objects.filter(user=request.user)
-        campaigns = CampaignAnalytic.objects.filter(user=request.user)
+        campaigns = CampaignAnalytic.objects.filter(user=request.user).order_by('-date')[:10]
         
         # 1. Historical Trends aggregation & Metrics Calculation
         
@@ -1522,7 +1522,8 @@ class SubscriberAnalyticsView(APIView):
         current_year = now.year
         
         growth_records = {g.month: g.count for g in growth_data if g.year == current_year}
-        monthly_stats = campaigns.filter(date__year=current_year).annotate(
+        # Use all campaigns for stats, not just current year
+        monthly_stats = campaigns.annotate(
             m=ExtractMonth('date')
         ).values('m').annotate(
             avg_open=Avg('open_rate'),
@@ -5601,8 +5602,31 @@ class AddFundsView(APIView):
                 description=f'Wallet funding of ${amount}'
             )
             
-            # Check for saved default card
-            default_pm_id = stripe_customer.get('invoice_settings', {}).get('default_payment_method')
+            # Check for saved default card - use correct Stripe API field
+            default_pm_id = None
+            
+            # Try to get default payment method from customer
+            try:
+                customer_payment_methods = stripe.PaymentMethod.list(
+                    customer=cust_id,
+                    type='card'
+                )
+                
+                # Find the default payment method (marked as default in customer)
+                for pm in customer_payment_methods.data:
+                    if pm.metadata.get('is_default') == 'true':
+                        default_pm_id = pm.id
+                        break
+                
+                # If no default found, use the first card as fallback
+                if not default_pm_id and customer_payment_methods.data:
+                    default_pm_id = customer_payment_methods.data[0].id
+                    
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"Error retrieving payment methods: {str(e)}")
+            
+            if default_pm_id:
             
             if default_pm_id:
                 # User has a saved card, try direct charge
