@@ -978,6 +978,7 @@ class SwapManagementListView(APIView):
     def get(self, request):
         user = request.user
         tab = request.query_params.get('tab', 'all').lower()
+        status_filter = request.query_params.get('status', '').lower()
         search = request.query_params.get('search', '').strip()
 
         # Auto-expire pending swaps older than 7 days
@@ -1002,17 +1003,21 @@ class SwapManagementListView(APIView):
             'requester', 'slot', 'book'
         ).order_by('-created_at')
 
-        # Tab filtering
-        if tab == 'pending':
-            qs = qs.filter(slot__user=user, status='pending')
-        elif tab == 'sending':
-            qs = qs.filter(requester=user, status='pending')
-        elif tab == 'rejected':
-            qs = qs.filter(status='rejected')
-        elif tab == 'scheduled':
-            qs = qs.filter(status='scheduled')
-        elif tab == 'completed':
-            qs = qs.filter(status__in=['completed', 'verified'])
+        # Status filtering (takes priority over tab filtering)
+        if status_filter:
+            qs = qs.filter(status=status_filter)
+        else:
+            # Tab filtering (only if no explicit status filter)
+            if tab == 'pending':
+                qs = qs.filter(slot__user=user, status='pending')
+            elif tab == 'sending':
+                qs = qs.filter(requester=user, status='pending')
+            elif tab == 'rejected':
+                qs = qs.filter(status='rejected')
+            elif tab == 'scheduled':
+                qs = qs.filter(status='scheduled')
+            elif tab == 'completed':
+                qs = qs.filter(status__in=['completed', 'verified'])
 
         # Search by author name, book title, or date
         if search:
@@ -1030,17 +1035,26 @@ class SwapManagementListView(APIView):
 
         # Tab counts for the badge numbers on each tab
         all_qs = SwapRequest.objects.filter(Q(slot__user=user) | Q(requester=user))
-        tab_counts = {
-            'all': all_qs.count(),
-            'pending': all_qs.filter(slot__user=user, status='pending').count(),
-            'sending': all_qs.filter(requester=user, status='pending').count(),
-            'rejected': all_qs.filter(status='rejected').count(),
-            'scheduled': all_qs.filter(status='scheduled').count(),
-            'completed': all_qs.filter(status__in=['completed', 'verified']).count(),
-        }
+        
+        # If status filter is provided, use it for counts
+        if status_filter:
+            tab_counts = {
+                'all': all_qs.count(),
+                'filtered': all_qs.filter(status=status_filter).count(),
+            }
+        else:
+            tab_counts = {
+                'all': all_qs.count(),
+                'pending': all_qs.filter(slot__user=user, status='pending').count(),
+                'sending': all_qs.filter(requester=user, status='pending').count(),
+                'rejected': all_qs.filter(status='rejected').count(),
+                'scheduled': all_qs.filter(status='scheduled').count(),
+                'completed': all_qs.filter(status__in=['completed', 'verified']).count(),
+            }
 
         return Response({
             'tab': tab,
+            'status_filter': status_filter if status_filter else None,
             'tab_counts': tab_counts,
             'results': serializer.data,
         })
