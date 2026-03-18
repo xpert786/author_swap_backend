@@ -1519,7 +1519,7 @@ class PaymentTransactionSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'sender', 'receiver', 'sender_name', 'receiver_name',
             'sender_profile', 'receiver_profile', 'amount', 'amount_color', 'transaction_type',
-            'status', 'description', 'created_at', 'completed_at',
+            'status', 'description', 'created_at', 'completed_at','updated_at',
             'stripe_payment_intent_id', 'stripe_transfer_id'
         ]
         read_only_fields = ['sender', 'receiver', 'stripe_payment_intent_id', 'stripe_transfer_id']
