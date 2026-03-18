@@ -346,6 +346,7 @@ class SwapManagementSerializer(serializers.ModelSerializer):
     """
     status = serializers.SerializerMethodField()
     # Author info (the person who SENT the request)
+    author_id = serializers.SerializerMethodField()
     sender_id = serializers.SerializerMethodField()
     receiver_id = serializers.SerializerMethodField()
     author_name = serializers.SerializerMethodField()
