@@ -431,13 +431,25 @@ class SwapManagementSerializer(serializers.ModelSerializer):
         if not is_paid_slot:
             return False
         
-        # 2. Check for actual SwapPayment record with status='completed'
+        # 1. Primary check: check actual SwapPayment record status
         try:
             payment = obj.payment
-            return payment.status == 'completed'
+            if payment and payment.status == 'completed':
+                return True
         except:
-            return False
+            pass # No payment record, but check transactions next
+
+        # 2. Fallback check: check for any successful transaction record
+        from core.models import PaymentTransaction
+        tx_exists = PaymentTransaction.objects.filter(
+            swap_request=obj, 
+            status='completed'
+        ).exists()
         
+        if tx_exists:
+            # If a successful transaction exists, we should trust it
+            return True
+
         return False
 
     def to_representation(self, instance):

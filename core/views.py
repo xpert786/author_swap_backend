@@ -1570,6 +1570,7 @@ class SubscriberAnalyticsView(APIView):
             "summary_stats": {
                 "active_subscribers": {
                     "value": verification.audience_size,
+                    "active": verification.active_subscribers,
                     "delta": sub_delta_str,
                     "delta_text": "this month",
                     "is_positive": sub_delta >= 0
@@ -4241,60 +4242,57 @@ class StripeWebhookView(APIView):
                         ).first()
                         
                         if swap_payment:
-                            logger.info(f"Found SwapPayment record, updating to completed")
-                            from django.utils import timezone
-                            swap_payment.status = 'completed'
+                            logger.info(f"Found SwapPayment record, calling complete_payment()")
+                            # Ensure session ID and intent ID are preserved
+                            if not swap_payment.stripe_checkout_session_id:
+                                swap_payment.stripe_checkout_session_id = session.get('id')
                             swap_payment.stripe_payment_intent_id = payment_intent
-                            swap_payment.paid_at = timezone.now()
-                            swap_payment.save(update_fields=['status', 'stripe_payment_intent_id', 'paid_at'])
-                            logger.info(f"SwapPayment {swap_payment.id} updated successfully")
+                            swap_payment.save(update_fields=['stripe_checkout_session_id', 'stripe_payment_intent_id'])
+                            
+                            # Use internal method to finalize and move money!
+                            swap_payment.complete_payment()
+                            logger.info(f"SwapPayment {swap_payment.id} finalized via complete_payment()")
 
                             # Notify the receiver (slot owner)
-                            from core.models import Notification, SwapRequest
+                            from core.models import Notification
                             swap_req = swap_payment.swap_request
                             Notification.objects.create(
                                 recipient=swap_req.slot.user,
                                 title="Payment Received! 💰",
                                 badge="WALLET",
-                                message=f"{swap_req.requester.username} has sent you ${swap_payment.amount}. Your account is credited. Please confirm receipt on the swap management page.",
+                                message=f"{swap_req.requester.username} has sent you ${swap_payment.amount}. Your wallet has been credited.",
                                 action_url=f"/dashboard/swaps/manage/"
                             )
                         else:
-                            # Create SwapPayment if it doesn't exist (for legacy swaps or race conditions)
-                            logger.info(f"No SwapPayment found, creating new record for swap_request_id: {swap_request_id}")
+                            # Create SwapPayment if it doesn't exist
+                            logger.info(f"No SwapPayment found, creating new for swap_request_id: {swap_request_id}")
                             try:
                                 swap_request = SwapRequest.objects.get(id=swap_request_id_int)
-                                slot = swap_request.slot
-                                payer = swap_request.requester
-                                
                                 swap_payment = SwapPayment.objects.create(
                                     swap_request=swap_request,
-                                    payer=payer,
-                                    amount=slot.price or 0,
+                                    payer=swap_request.requester,
+                                    amount=swap_request.slot.price or 0,
                                     currency='USD',
                                     stripe_checkout_session_id=session.get('id'),
                                     stripe_payment_intent_id=payment_intent,
-                                    status='completed',
-                                    paid_at=timezone.now()
+                                    status='pending', # Start as pending so complete_payment works
                                 )
-                                logger.info(f"Created new SwapPayment {swap_payment.id} with status completed")
+                                # Now move the money!
+                                swap_payment.complete_payment()
+                                logger.info(f"Created and finalized new SwapPayment {swap_payment.id}")
                             except Exception as e:
-                                logger.error(f"Failed to create SwapPayment: {e}")
+                                logger.error(f"Failed to process new SwapPayment: {e}")
                                 swap_payment = None
                             
-                            # Create notification for slot owner that payment is complete
-                            try:
-                                if swap_payment:
-                                    swap_request = swap_payment.swap_request
-                                    Notification.objects.create(
-                                        recipient=swap_request.slot.user,
-                                        title="Swap Payment Received",
-                                        badge="SWAP",
-                                        message=f"Payment received for swap request from {swap_payment.payer.username}.",
-                                        action_url=f"/dashboard/swaps/manage/"
-                                    )
-                            except Exception as e:
-                                logger.error(f"Failed to create notification: {e}")
+                            # Notification
+                            if swap_payment:
+                                Notification.objects.create(
+                                    recipient=swap_payment.swap_request.slot.user,
+                                    title="Swap Payment Received",
+                                    badge="SWAP",
+                                    message=f"Payment received from {swap_payment.payer.username}. Wallet credited.",
+                                    action_url=f"/dashboard/swaps/manage/"
+                                )
                     except Exception as e:
                         logger.error(f"Webhook swap payment error: {e}")
                         import traceback
