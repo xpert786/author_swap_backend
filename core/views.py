@@ -5022,6 +5022,18 @@ class WalletTransactionHistoryView(APIView):
     def get(self, request):
         user = request.user
         
+        # Clean up expired pending wallet funding transactions (older than 1 hour)
+        from datetime import timedelta
+        expiry_time = timezone.now() - timedelta(hours=1)
+        expired_transactions = PaymentTransaction.objects.filter(
+            sender=user,
+            transaction_type='bonus',
+            status='pending',
+            created_at__lt=expiry_time
+        )
+        if expired_transactions.exists():
+            expired_transactions.update(status='cancelled')
+        
         # Get all transactions involving this user using Q objects for efficiency and SQLite compatibility
         from django.db.models import Q
         all_transactions = PaymentTransaction.objects.filter(
@@ -5036,6 +5048,10 @@ class WalletTransactionHistoryView(APIView):
         status_filter = request.query_params.get('status', None)
         if status_filter:
             all_transactions = all_transactions.filter(status=status_filter)
+        
+        # By default, exclude cancelled transactions unless explicitly requested
+        if not status_filter:
+            all_transactions = all_transactions.exclude(status='cancelled')
         
         serializer = PaymentTransactionSerializer(all_transactions, many=True, context={'request': request})
         return Response(serializer.data)
@@ -5537,7 +5553,60 @@ class AddFundsView(APIView):
                 description=f'Wallet funding of ${amount}'
             )
             
-            # Create Stripe Checkout Session for one-time payment
+            # Check for saved default card
+            default_pm_id = stripe_customer.get('invoice_settings', {}).get('default_payment_method')
+            
+            if default_pm_id:
+                # User has a saved card, try direct charge
+                try:
+                    payment_intent = stripe.PaymentIntent.create(
+                        amount=int(amount * 100),
+                        currency='usd',
+                        customer=cust_id,
+                        payment_method=default_pm_id,
+                        confirm=True,
+                        off_session=True,
+                        metadata={
+                            'transaction_id': str(transaction.id),
+                            'transaction_type': 'wallet_funding',
+                            'user_id': str(user.id),
+                            'amount': str(amount)
+                        },
+                        description=f"Wallet funding: ${amount}"
+                    )
+                    
+                    # Payment successful, complete transaction
+                    transaction.status = 'completed'
+                    transaction.stripe_payment_intent_id = payment_intent.id
+                    transaction.completed_at = timezone.now()
+                    transaction.save()
+                    
+                    # Add funds to wallet
+                    wallet.add_balance(amount)
+                    
+                    # Create notification
+                    from core.models import Notification
+                    Notification.objects.create(
+                        recipient=user,
+                        title="💵 Wallet Funded!",
+                        badge="WALLET",
+                        message=f"${amount} has been added to your wallet. New balance: ${wallet.balance}",
+                        action_url="/wallet"
+                    )
+                    
+                    return Response({
+                        'detail': 'Funds added successfully using your saved card!',
+                        'payment_type': 'card',
+                        'transaction': PaymentTransactionSerializer(transaction, context={'request': request}).data,
+                        'new_balance': str(wallet.balance)
+                    })
+                    
+                except (stripe.error.CardError, stripe.error.StripeError) as e:
+                    # Card failed, fall through to checkout
+                    import logging
+                    logging.getLogger(__name__).warning(f"Saved card charge failed for user {user.id}: {str(e)}")
+            
+            # No saved card or card failed - use Stripe Checkout
             checkout_session = stripe.checkout.Session.create(
                 payment_method_types=['card'],
                 line_items=[{
