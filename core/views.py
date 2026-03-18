@@ -1010,9 +1010,9 @@ class SwapManagementListView(APIView):
         elif tab == 'rejected':
             qs = qs.filter(status='rejected')
         elif tab == 'scheduled':
-            qs = qs.filter(status__in=['scheduled', 'completed', 'confirmed'])
+            qs = qs.filter(status__in=['scheduled', 'confirmed'])
         elif tab == 'completed':
-            qs = qs.filter(status='verified')
+            qs = qs.filter(status__in=['completed', 'verified'])
 
         # Search by author name, book title, or date
         if search:
@@ -1035,8 +1035,8 @@ class SwapManagementListView(APIView):
             'pending': all_qs.filter(slot__user=user, status='pending').count(),
             'sending': all_qs.filter(requester=user, status='pending').count(),
             'rejected': all_qs.filter(status='rejected').count(),
-            'scheduled': all_qs.filter(status__in=['scheduled', 'completed', 'confirmed']).count(),
-            'completed': all_qs.filter(status='verified').count(),
+            'scheduled': all_qs.filter(status__in=['scheduled', 'confirmed']).count(),
+            'completed': all_qs.filter(status__in=['completed', 'verified']).count(),
         }
 
         return Response({
@@ -5561,6 +5561,16 @@ class ConfirmAddFundsView(APIView):
                 # Complete the transaction and add funds to wallet
                 wallet, _ = UserWallet.objects.get_or_create(user=request.user)
                 transaction.complete_transaction()
+                
+                # Create notification for wallet funding
+                from core.models import Notification
+                Notification.objects.create(
+                    recipient=request.user,
+                    title="💵 Wallet Funded!",
+                    badge="WALLET",
+                    message=f"${transaction.amount} has been added to your wallet. New balance: ${wallet.balance}",
+                    action_url="/wallet"
+                )
                 
                 return Response({
                     'detail': 'Funds added successfully!',

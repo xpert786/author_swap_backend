@@ -515,6 +515,29 @@ class PaymentTransaction(models.Model):
             if self.transaction_type != 'withdrawal':
                 wallet, created = UserWallet.objects.get_or_create(user=self.receiver)
                 wallet.add_balance(self.amount)
+                
+                # Create notification for receiver - money received
+                from core.models import Notification
+                Notification.objects.create(
+                    recipient=self.receiver,
+                    title="💰 Payment Received!",
+                    badge="PAYMENT",
+                    message=f"${self.amount} has been credited to your account from {self.sender.username}.",
+                    action_url="/wallet"
+                )
+            
+            # Create notification for sender - payment sent/deducted
+            if self.sender and self.transaction_type != 'withdrawal':
+                from core.models import Notification
+                sender_wallet, _ = UserWallet.objects.get_or_create(user=self.sender)
+                Notification.objects.create(
+                    recipient=self.sender,
+                    title="💳 Payment Sent",
+                    badge="PAYMENT",
+                    message=f"${self.amount} has been deducted from your account. Remaining balance: ${sender_wallet.balance}",
+                    action_url="/wallet"
+                )
+            
             return True
         return False
 
