@@ -1010,7 +1010,7 @@ class SwapManagementListView(APIView):
         elif tab == 'rejected':
             qs = qs.filter(status='rejected')
         elif tab == 'scheduled':
-            qs = qs.filter(status__in=['scheduled', 'confirmed'])
+            qs = qs.filter(status='scheduled')
         elif tab == 'completed':
             qs = qs.filter(status__in=['completed', 'verified'])
 
@@ -1035,7 +1035,7 @@ class SwapManagementListView(APIView):
             'pending': all_qs.filter(slot__user=user, status='pending').count(),
             'sending': all_qs.filter(requester=user, status='pending').count(),
             'rejected': all_qs.filter(status='rejected').count(),
-            'scheduled': all_qs.filter(status__in=['scheduled', 'confirmed']).count(),
+            'scheduled': all_qs.filter(status='scheduled').count(),
             'completed': all_qs.filter(status__in=['completed', 'verified']).count(),
         }
 
