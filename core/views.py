@@ -2574,23 +2574,16 @@ class MySwapPartnersView(APIView):
     def get(self, request):
         user = request.user
         
-        # Get swap partners (any swap relationship, excluding rejected)
-        swap_requests = SwapRequest.objects.filter(
-            (Q(requester=user) | Q(slot__user=user))
-        ).exclude(status='rejected')
+        # Get all users who have created newsletters
+        newsletter_users = User.objects.filter(
+            newsletter_slots__isnull=False
+        ).distinct()
         
-        partner_users = []
-        for sr in swap_requests:
-            if sr.requester == user:
-                partner_users.append(sr.slot.user)
-            else:
-                partner_users.append(sr.requester)
-        
-        # Unique
-        partner_users = list(set(partner_users))
+        # Exclude current user
+        newsletter_users = newsletter_users.exclude(id=user.id)
         
         from core.serializers import ConversationPartnerSerializer
-        serializer = ConversationPartnerSerializer(partner_users, many=True, context={'request': request})
+        serializer = ConversationPartnerSerializer(newsletter_users, many=True, context={'request': request})
         return Response(serializer.data)
         search = request.query_params.get('search', '').strip()
 
