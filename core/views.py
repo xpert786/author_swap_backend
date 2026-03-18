@@ -5627,8 +5627,6 @@ class AddFundsView(APIView):
                 logging.getLogger(__name__).warning(f"Error retrieving payment methods: {str(e)}")
             
             if default_pm_id:
-            
-            if default_pm_id:
                 # User has a saved card, try direct charge
                 try:
                     payment_intent = stripe.PaymentIntent.create(
