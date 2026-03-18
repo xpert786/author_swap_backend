@@ -412,14 +412,14 @@ def sync_subscriber_analytics(user):
                 try:
                     if is_new_api:
                         name = camp.get('subject') or camp.get('name')
-                        date_val = camp.get('sent_at') or timezone.now().date()
+                        date_str = camp.get('sent_at') or camp.get('created_at')
                         subs = camp.get('total_recipients', 0)
-                        open_r = camp.get('open_rate_percent', 0.0)
-                        click_r = camp.get('click_rate_percent', 0.0)
+                        open_r = camp.get('open_rate_percent', 0.0) or camp.get('open_rate', 0.0)
+                        click_r = camp.get('click_rate_percent', 0.0) or camp.get('click_rate', 0.0)
                     else:
                         # Classic sent campaigns mapping
                         name = camp.get('subject') or camp.get('name') or "Untitled Campaign"
-                        date_val = camp.get('date_sent') or timezone.now().date()
+                        date_str = camp.get('date_sent') or camp.get('created_at')
                         
                         # In classic, stats often nested in 'stats' dict or top level
                         stats = camp.get('stats', {})
@@ -432,18 +432,40 @@ def sync_subscriber_analytics(user):
                             # Fallback to direct rate fields
                             open_r = camp.get('opened_rate', 0.0) or camp.get('open_rate', 0.0)
                             click_r = camp.get('clicked_rate', 0.0) or camp.get('click_rate', 0.0)
-
-                    CampaignAnalytic.objects.update_or_create(
-                        user=user,
-                        name=name,
-                        defaults={
-                            'date': date_val,
-                            'subscribers': subs,
-                            'open_rate': open_r,
-                            'click_rate': click_r,
-                            'type': 'Recent'
-                        }
-                    )
+                    
+                    # Parse date string properly
+                    date_val = timezone.now().date()
+                    if date_str:
+                        try:
+                            if isinstance(date_str, str):
+                                from datetime import datetime
+                                # Try multiple date formats
+                                for fmt in ["%Y-%m-%d", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%d %H:%M:%S"]:
+                                    try:
+                                        date_val = datetime.strptime(date_str[:10], "%Y-%m-%d").date()
+                                        break
+                                    except:
+                                        continue
+                            else:
+                                date_val = date_str
+                        except Exception as date_e:
+                            logger.error(f"[DIAGNOSTIC] Date parsing error: {date_e}")
+                    
+                    # Ensure we have valid data
+                    if name and subs > 0:
+                        CampaignAnalytic.objects.update_or_create(
+                            user=user,
+                            name=name,
+                            defaults={
+                                'date': date_val,
+                                'subscribers': subs,
+                                'open_rate': open_r,
+                                'click_rate': click_r,
+                                'type': 'Recent'
+                            }
+                        )
+                        logger.info(f"[DIAGNOSTIC] Saved campaign: {name} ({subs} subscribers, {open_r}% open)")
+                    
                 except Exception as camp_e:
                     logger.error(f"[DIAGNOSTIC] Error processing campaign {camp.get('id')}: {camp_e}")
 
