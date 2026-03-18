@@ -1005,7 +1005,16 @@ class SwapManagementListView(APIView):
 
         # Status filtering (takes priority over tab filtering)
         if status_filter:
-            qs = qs.filter(status=status_filter)
+            if tab == 'pending':
+                qs = qs.filter(slot__user=user, status='pending')
+            elif tab == 'sending':
+                qs = qs.filter(requester=user, status='pending')
+            elif tab == 'rejected':
+                qs = qs.filter(status='rejected')
+            elif tab == 'scheduled':
+                qs = qs.filter(status='scheduled')
+            elif tab == 'completed':
+                qs = qs.filter(status__in=['completed', 'verified'])
         else:
             # Tab filtering (only if no explicit status filter)
             if tab == 'pending':
