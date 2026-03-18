@@ -1384,7 +1384,7 @@ class ConversationPartnerSerializer(serializers.ModelSerializer):
             (Q(requester=obj) & Q(slot__user=request.user))
         ).exclude(status='rejected').order_by('-created_at').first()
         
-        if swap.status in ['confirmed', 'completed']:
+        if swap and swap.status in ['confirmed', 'completed']:
             return 'scheduled'
         return swap.status if swap else None
 
