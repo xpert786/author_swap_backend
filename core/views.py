@@ -5046,14 +5046,18 @@ class DirectPaymentView(APIView):
                 # - Sender is the requester (paying for the swap)
                 # - Receiver is the slot owner (getting paid)
                 # - Status indicates payment is expected
+                # - Slot is a paid slot (either promotion_type='paid' OR price > 0)
                 swap_request = SwapRequest.objects.filter(
                     Q(requester=sender, slot__user=receiver) |
                     Q(requester=receiver, slot__user=sender)
                 ).filter(
-                    status__in=['pending', 'scheduled', 'confirmed'],
-                    slot__promotion_type='paid'
+                    status__in=['pending', 'scheduled', 'confirmed']
+                ).filter(
+                    Q(slot__promotion_type='paid') | Q(slot__price__gt=0)
                 ).select_related('slot').first()
-            except:
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).error(f"Swap auto-detect error: {str(e)}")
                 pass  # No matching swap found, continue without linking
         
         # Validate amount
@@ -5326,4 +5330,196 @@ class WithdrawFundsView(APIView):
             transaction.save()
             return Response({
                 'detail': f'Withdrawal failed: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class AddFundsView(APIView):
+    """
+    POST /api/wallet/add-funds/
+    Add funds to user's wallet via Stripe Checkout
+    Body: {
+        "amount": "50.00"
+    }
+    Returns: {
+        "url": "https://checkout.stripe.com/..."
+    }
+    User is redirected to Stripe Checkout, then back to wallet page
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        if not settings.STRIPE_SECRET_KEY:
+            return Response(
+                {"detail": "Stripe API configuration is missing."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        
+        stripe.api_key = settings.STRIPE_SECRET_KEY.strip()
+        
+        user = request.user
+        amount = request.data.get('amount')
+        
+        # Validate amount
+        try:
+            if amount is None or str(amount).strip() == '':
+                return Response({
+                    'detail': 'Amount is required.'
+                }, status=status.HTTP_400_BAD_REQUEST)
+                
+            amount = Decimal(str(amount))
+            if amount <= 0:
+                return Response({
+                    'detail': 'Amount must be greater than 0.'
+                }, status=status.HTTP_400_BAD_REQUEST)
+                
+            # Max limit check (optional)
+            if amount > Decimal('10000'):
+                return Response({
+                    'detail': 'Maximum deposit amount is $10,000.'
+                }, status=status.HTTP_400_BAD_REQUEST)
+                
+        except (ValueError, TypeError, InvalidOperation) as e:
+            return Response({
+                'detail': f'Invalid amount: {str(e)}'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            # Get or create user's wallet
+            wallet, created = UserWallet.objects.get_or_create(user=user)
+            
+            # Get or create Stripe Customer
+            from authentication.models import UserProfile
+            user_profile, _ = UserProfile.objects.get_or_create(user=user)
+            
+            if user_profile.stripe_customer_id:
+                try:
+                    stripe_customer = stripe.Customer.retrieve(user_profile.stripe_customer_id)
+                    cust_id = stripe_customer.id
+                except stripe.error.InvalidRequestError:
+                    # Customer ID is stale, create new one
+                    stripe_customer = stripe.Customer.create(
+                        email=user.email,
+                        name=user.get_full_name() or user.username,
+                        metadata={'user_id': str(user.id)}
+                    )
+                    user_profile.stripe_customer_id = stripe_customer.id
+                    user_profile.save()
+                    cust_id = stripe_customer.id
+            else:
+                stripe_customer = stripe.Customer.create(
+                    email=user.email,
+                    name=user.get_full_name() or user.username,
+                    metadata={'user_id': str(user.id)}
+                )
+                user_profile.stripe_customer_id = stripe_customer.id
+                user_profile.save()
+                cust_id = stripe_customer.id
+            
+            # Create a pending transaction record
+            transaction = PaymentTransaction.objects.create(
+                sender=user,
+                receiver=user,  # Self-transaction for adding funds
+                amount=amount,
+                transaction_type='bonus',  # Using 'bonus' type for wallet funding
+                status='pending',
+                description=f'Wallet funding of ${amount}'
+            )
+            
+            # Create Stripe Checkout Session for one-time payment
+            checkout_session = stripe.checkout.Session.create(
+                payment_method_types=['card'],
+                line_items=[{
+                    'price_data': {
+                        'currency': 'usd',
+                        'product_data': {
+                            'name': f'Add Funds to Wallet',
+                            'description': f'Deposit ${amount} to your Author Swap wallet',
+                        },
+                        'unit_amount': int(amount * 100),  # Convert to cents
+                    },
+                    'quantity': 1,
+                }],
+                mode='payment',
+                client_reference_id=str(user.id),
+                customer=cust_id,
+                success_url=f"http://72.61.251.114/authorswap-frontend/wallet?payment=success",
+                cancel_url=f"http://72.61.251.114/authorswap-frontend/wallet?payment=cancelled",
+                metadata={
+                    'transaction_id': str(transaction.id),
+                    'transaction_type': 'wallet_funding',
+                    'user_id': str(user.id),
+                    'amount': str(amount)
+                }
+            )
+            
+            # Store the checkout session ID
+            transaction.stripe_payment_intent_id = checkout_session.id
+            transaction.save()
+            
+            return Response({
+                'detail': 'Redirecting to Stripe Checkout...',
+                'url': checkout_session.url,
+                'transaction_id': transaction.id,
+                'amount': str(amount)
+            })
+            
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"Add Funds Error: {str(e)}")
+            return Response({
+                'detail': f'Failed to create checkout session: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class ConfirmAddFundsView(APIView):
+    """
+    POST /api/wallet/confirm-funds/
+    Called after Stripe payment success to complete the wallet funding
+    Body: {
+        "transaction_id": 123
+    }
+    Or this can be handled by Stripe Webhook
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def post(self, request):
+        transaction_id = request.data.get('transaction_id')
+        
+        try:
+            transaction = PaymentTransaction.objects.get(
+                id=transaction_id,
+                sender=request.user,
+                transaction_type='bonus',
+                status='pending'
+            )
+        except PaymentTransaction.DoesNotExist:
+            return Response({
+                'detail': 'Transaction not found or already processed.'
+            }, status=status.HTTP_404_NOT_FOUND)
+        
+        try:
+            # Verify payment status with Stripe
+            stripe.api_key = settings.STRIPE_SECRET_KEY.strip()
+            session = stripe.checkout.Session.retrieve(transaction.stripe_payment_intent_id)
+            
+            if session.payment_status == 'paid':
+                # Complete the transaction and add funds to wallet
+                wallet, _ = UserWallet.objects.get_or_create(user=request.user)
+                transaction.complete_transaction()
+                
+                return Response({
+                    'detail': 'Funds added successfully!',
+                    'transaction': PaymentTransactionSerializer(transaction, context={'request': request}).data,
+                    'new_balance': str(wallet.balance)
+                })
+            else:
+                return Response({
+                    'detail': f'Payment not completed. Status: {session.payment_status}'
+                }, status=status.HTTP_400_BAD_REQUEST)
+                
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"Confirm Funds Error: {str(e)}")
+            return Response({
+                'detail': f'Failed to confirm payment: {str(e)}'
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

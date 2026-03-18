@@ -16,7 +16,7 @@ from .views import (
     CreateStripeCheckoutSessionView, CreateSwapCheckoutSessionView, SyncSwapPaymentView, ConfirmSwapPaymentView, StripeWebhookView, ChangePlanView,
     SetupIntentView, SavedPaymentMethodsView, DeletePaymentMethodView, SetDefaultPaymentMethodView,
     PreviewPlanChangeView, SyncSubscriptionView, UpgradeSubscriptionView,
-    WalletView, WalletTransactionHistoryView, WithdrawFundsView, DirectPaymentView,
+    WalletView, WalletTransactionHistoryView, WithdrawFundsView, DirectPaymentView, AddFundsView, ConfirmAddFundsView,
 )
 from .calendar_views import (
     GoogleCalendarExportView, OutlookCalendarExportView, ICSExportView, CalendarExportOptionsView
@@ -104,6 +104,8 @@ urlpatterns = [
     # Wallet & Payment System
     path('wallet/', WalletView.as_view(), name='wallet'),
     path('wallet/transactions/', WalletTransactionHistoryView.as_view(), name='wallet-transactions'),
+    path('wallet/add-funds/', AddFundsView.as_view(), name='wallet-add-funds'),
+    path('wallet/confirm-funds/', ConfirmAddFundsView.as_view(), name='wallet-confirm-funds'),
     path('wallet/withdraw/', WithdrawFundsView.as_view(), name='wallet-withdraw'),
     path('payments/direct/', DirectPaymentView.as_view(), name='direct-payment'),
 
