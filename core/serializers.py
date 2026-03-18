@@ -1008,22 +1008,37 @@ class TrackMySwapSerializer(serializers.ModelSerializer):
         
         # Get link clicks for this swap
         for lc in obj.link_clicks.all():
+            # Add tracking parameter to existing URL
+            if '?' in lc.destination_url:
+                tracked_url = f"{lc.destination_url}&swap_track={lc.id}"
+            else:
+                tracked_url = f"{lc.destination_url}?swap_track={lc.id}"
+            
             links.append({
                 "id": lc.id,
                 "name": lc.link_name,
-                "url": lc.destination_url,
+                "url": tracked_url,  # URL with tracking parameter
+                "destination_url": lc.destination_url,  # Original URL for reference
                 "clicks": lc.clicks,
                 "ctr": f"{lc.ctr}%",
                 "ctr_label": lc.ctr_label,
                 "conversion": lc.conversions or "0 sales"
             })
         
-        # If no link clicks exist, add placeholder
+        # If no link clicks exist, add placeholder with tracking
         if not links and obj.book:
+            # Add tracking parameter to book URL
+            book_url = getattr(obj.book, 'amazon_url', '#') or "#"
+            if '?' in book_url:
+                tracked_url = f"{book_url}&swap_track={obj.id}"
+            else:
+                tracked_url = f"{book_url}?swap_track={obj.id}"
+                
             links.append({
                 "id": f"swap_{obj.id}",
                 "name": f"Swap Promo - {obj.book.title}",
-                "url": getattr(obj.book, 'amazon_url', '#') or "#",
+                "url": tracked_url,  # URL with tracking parameter
+                "destination_url": book_url,  # Original URL
                 "clicks": 0,
                 "ctr": "0.0%",
                 "ctr_label": "Pending Data",
