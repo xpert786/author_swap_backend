@@ -5022,9 +5022,11 @@ class WalletTransactionHistoryView(APIView):
     def get(self, request):
         user = request.user
         
-        # Clean up expired pending wallet funding transactions (older than 1 hour)
+        # Clean up pending wallet funding transactions
         from datetime import timedelta
-        expiry_time = timezone.now() - timedelta(hours=1)
+        expiry_time = timezone.now() - timedelta(minutes=30)  # 30 minutes instead of 1 hour
+        
+        # Clean up all pending wallet funding transactions older than 30 minutes
         expired_transactions = PaymentTransaction.objects.filter(
             sender=user,
             transaction_type='bonus',
@@ -5033,6 +5035,49 @@ class WalletTransactionHistoryView(APIView):
         )
         if expired_transactions.exists():
             expired_transactions.update(status='cancelled')
+        
+        # Also clean up transactions with checkout session IDs that are still pending
+        checkout_expired_transactions = PaymentTransaction.objects.filter(
+            sender=user,
+            transaction_type='bonus',
+            status='pending',
+            stripe_payment_intent_id__startswith='cs_'
+        )
+        if checkout_expired_transactions.exists():
+            # Verify with Stripe if these sessions are actually completed
+            import stripe
+            stripe.api_key = settings.STRIPE_SECRET_KEY.strip()
+            
+            for transaction in checkout_expired_transactions:
+                try:
+                    session = stripe.checkout.Session.retrieve(transaction.stripe_payment_intent_id)
+                    if session.payment_status == 'paid':
+                        # Complete the transaction
+                        transaction.status = 'completed'
+                        transaction.completed_at = timezone.now()
+                        transaction.save()
+                        
+                        # Add funds to wallet
+                        wallet, _ = UserWallet.objects.get_or_create(user=user)
+                        wallet.add_balance(transaction.amount)
+                        
+                        # Create notification
+                        from core.models import Notification
+                        Notification.objects.create(
+                            recipient=user,
+                            title="💵 Wallet Funded!",
+                            badge="WALLET",
+                            message=f"${transaction.amount} has been added to your wallet. New balance: ${wallet.balance}",
+                            action_url="/wallet"
+                        )
+                    else:
+                        # Cancel the transaction
+                        transaction.status = 'cancelled'
+                        transaction.save()
+                except Exception:
+                    # If we can't verify, cancel it
+                    transaction.status = 'cancelled'
+                    transaction.save()
         
         # Get all transactions involving this user using Q objects for efficiency and SQLite compatibility
         from django.db.models import Q
@@ -5049,9 +5094,12 @@ class WalletTransactionHistoryView(APIView):
         if status_filter:
             all_transactions = all_transactions.filter(status=status_filter)
         
-        # By default, exclude cancelled transactions unless explicitly requested
+        # By default, exclude cancelled and pending wallet funding transactions unless explicitly requested
         if not status_filter:
-            all_transactions = all_transactions.exclude(status='cancelled')
+            all_transactions = all_transactions.exclude(
+                Q(status='cancelled') | 
+                Q(transaction_type='bonus', status='pending')
+            )
         
         serializer = PaymentTransactionSerializer(all_transactions, many=True, context={'request': request})
         return Response(serializer.data)
