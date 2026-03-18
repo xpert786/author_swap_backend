@@ -68,25 +68,25 @@ def get_subscriber_counts_by_status(api_key: str = None) -> dict:
                 "Authorization": f"Bearer {api_key}"
             }
             
+            # New MailerLite API: limit=0 returns {"total": N} at the top level
+            # This is the reliable way to get counts (meta.total does NOT exist in cursor pagination)
             for status in statuses:
-                # Use limit=1 - some API versions/proxies may behave better than limit=0
                 try:
                     response = requests.get(
                         url, 
                         headers=headers, 
-                        params={"limit": 1, "filter[status]": status}, 
+                        params={"limit": 0, "filter[status]": status}, 
                         timeout=10
                     )
                     if response.status_code == 200:
                         data = response.json()
                         logger.info(f"[DIAGNOSTIC] Raw response for {status}: {data}")
-                        count = data.get('meta', {}).get('total', 0)
+                        # limit=0 returns {"total": N} at top level
+                        count = data.get('total', 0)
                         
-                        # Fallback: if meta.total is missing but we got data, check length
-                        if count == 0 and 'data' in data and len(data['data']) > 0:
-                            count = len(data['data'])
-                            # If it's 1 and we used limit=1, it might be more. 
-                            # But usually meta.total is present.
+                        # Fallback: check meta.total (older API versions)
+                        if count == 0:
+                            count = data.get('meta', {}).get('total', 0)
                             
                         counts[status] = count
                         logger.info(f"[DIAGNOSTIC] Status '{status}': {count} subscribers")
@@ -97,41 +97,23 @@ def get_subscriber_counts_by_status(api_key: str = None) -> dict:
                     logger.error(f"[DIAGNOSTIC] Exception fetching {status}: {inner_e}")
                     counts[status] = 0
             
-            # Add a 'dashboard_total' fetch - usually matches Active + Unconfirmed
+            # Fetch overall total (all statuses combined)
             try:
-                # 1. Try fetching without status filter to see what the base total is
-                base_resp = requests.get(url, headers=headers, params={"limit": 1}, timeout=10)
+                base_resp = requests.get(url, headers=headers, params={"limit": 0}, timeout=10)
                 if base_resp.status_code == 200:
-                    base_total = base_resp.json().get('meta', {}).get('total', 0)
+                    base_data = base_resp.json()
+                    base_total = base_data.get('total', 0)
+                    # Fallback to meta.total for older API versions
+                    if base_total == 0:
+                        base_total = base_data.get('meta', {}).get('total', 0)
                     counts['dashboard_total'] = base_total
-                    logger.info(f"[DIAGNOSTIC] Base subscribers total: {base_total}")
-                
-                # 2. Try Groups endpoint - often reflects the 'Big Number' on dashboard
-                groups_resp = requests.get(f"{API_URL}/groups", headers=headers, params={"limit": 50}, timeout=10)
-                if groups_resp.status_code == 200:
-                    groups_data = groups_resp.json().get('data', [])
-                    # Sum count across all groups (usually one main group has the most)
-                    # Note: Subscribers can be in multiple groups, so this might overcount 
-                    # but we can take the max() if prefered.
-                    if groups_data:
-                        # In many cases, authors have one main list.
-                        max_group_count = max(g.get('subscribers_count', 0) for g in groups_data)
-                        counts['max_group_total'] = max_group_count
-                        logger.info(f"[DIAGNOSTIC] Max group subscribers: {max_group_count}")
+                    logger.info(f"[DIAGNOSTIC] Base subscribers total (limit=0): {base_total}")
             except Exception as e:
-                logger.error(f"[DIAGNOSTIC] Fallback totals failed: {e}")
+                logger.error(f"[DIAGNOSTIC] Base total fetch failed: {e}")
             
-            # DERIVE Unconfirmed if it's 0 but total is high
-            best_total = max(counts.get('dashboard_total', 0), counts.get('max_group_total', 0))
-            if counts.get('unconfirmed', 0) == 0 and best_total > counts.get('active', 0):
-                # If we have a high total but 0 unconfirmed, the difference is likely unconfirmed
-                derived_unconfirmed = best_total - counts.get('active', 0)
-                counts['unconfirmed'] = derived_unconfirmed
-                counts['is_derived'] = True
-                logger.info(f"[DIAGNOSTIC] Derived unconfirmed={derived_unconfirmed} from total={best_total}")
-            
-            if best_total > counts.get('dashboard_total', 0):
-                counts['dashboard_total'] = best_total
+            # If dashboard_total is still 0, sum up individual status counts
+            if counts.get('dashboard_total', 0) == 0:
+                counts['dashboard_total'] = counts.get('active', 0) + counts.get('unconfirmed', 0)
 
             logger.info(f"[DIAGNOSTIC] MailerLite status counts fetched: {counts}")
             return counts  # Return counts even if 0
@@ -307,12 +289,15 @@ def get_audience_size(email: str = None, api_key: str = None) -> int:
                 "Accept": "application/json",
                 "Authorization": f"Bearer {api_key}"
             }
-            # We fetch subscribers to get the 'meta' field which has the total.
-            # Removing status filter temporarily to see if we get a non-zero count.
-            response = requests.get(url, headers=headers, params={"limit": 1}, timeout=10)
+            # New MailerLite API: limit=0 returns {"total": N} at the top level
+            # meta.total does NOT exist in their cursor-based pagination
+            response = requests.get(url, headers=headers, params={"limit": 0}, timeout=10)
             if response.status_code == 200:
                 data = response.json()
-                total = data.get('meta', {}).get('total', 0)
+                total = data.get('total', 0)
+                # Fallback: check meta.total for older API versions
+                if total == 0:
+                    total = data.get('meta', {}).get('total', 0)
                 logger.info(f"New MailerLite API: Total Found {total}")
                 return total
             logger.warning(f"New MailerLite API failed ({response.status_code}): {response.text}")
