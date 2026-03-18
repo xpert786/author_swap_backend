@@ -891,6 +891,9 @@ class TrackMySwapSerializer(serializers.ModelSerializer):
 
     # Partner Links
     partner_links = serializers.SerializerMethodField()
+    
+    # Link Level CTR
+    link_level_ctr = serializers.SerializerMethodField()
 
     class Meta:
         model = SwapRequest
@@ -901,6 +904,7 @@ class TrackMySwapSerializer(serializers.ModelSerializer):
             'deadline', 'request_date', 'countdown_label',
             'status_label',
             'partner_links',
+            'link_level_ctr',
             'message',
         ]
 
@@ -997,6 +1001,36 @@ class TrackMySwapSerializer(serializers.ModelSerializer):
             "instagram": profile.instagram_url or None,
             "twitter": profile.tiktok_url or None,
         }
+    
+    def get_link_level_ctr(self, obj):
+        """Returns link level CTR data for this swap"""
+        links = []
+        
+        # Get link clicks for this swap
+        for lc in obj.link_clicks.all():
+            links.append({
+                "id": lc.id,
+                "name": lc.link_name,
+                "url": lc.destination_url,
+                "clicks": lc.clicks,
+                "ctr": f"{lc.ctr}%",
+                "ctr_label": lc.ctr_label,
+                "conversion": lc.conversions or "0 sales"
+            })
+        
+        # If no link clicks exist, add placeholder
+        if not links and obj.book:
+            links.append({
+                "id": f"swap_{obj.id}",
+                "name": f"Swap Promo - {obj.book.title}",
+                "url": getattr(obj.book, 'amazon_url', '#') or "#",
+                "clicks": 0,
+                "ctr": "0.0%",
+                "ctr_label": "Pending Data",
+                "conversion": "-"
+            })
+        
+        return links
 
 from django.db.models import Q
 from django.contrib.auth import get_user_model
