@@ -525,6 +525,32 @@ class PaymentTransaction(models.Model):
                     message=f"${self.amount} has been credited to your account from {self.sender.username}.",
                     action_url="/wallet"
                 )
+                
+                # Update swap status if this is a swap payment
+                if self.swap_request:
+                    swap = self.swap_request
+                    # Update swap status to completed if payment is done
+                    if swap.status in ['scheduled', 'confirmed']:
+                        swap.status = 'completed'
+                        swap.completed_at = timezone.now()
+                        swap.save()
+                        
+                        # Create notification for swap completion
+                        Notification.objects.create(
+                            recipient=swap.requester,
+                            title="✅ Swap Completed!",
+                            badge="SWAP",
+                            message=f"Your swap with {swap.slot.user.username} has been completed successfully.",
+                            action_url=f"/dashboard/swaps/track/{swap.id}/"
+                        )
+                        
+                        Notification.objects.create(
+                            recipient=swap.slot.user,
+                            title="✅ Swap Completed!",
+                            badge="SWAP",
+                            message=f"Your swap with {swap.requester.username} has been completed successfully.",
+                            action_url=f"/dashboard/swaps/track/{swap.id}/"
+                        )
             
             # Create notification for sender - payment sent/deducted
             if self.sender and self.transaction_type != 'withdrawal':
