@@ -395,12 +395,15 @@ class SwapManagementSerializer(serializers.ModelSerializer):
         is_paid_slot = self.get_eligible_for_pay(obj)
         payment_is_done = self.get_payment_done(obj)
         
-        # If it's a paid swap, and payment is NOT done, it MUST stay as 'scheduled' or 'payment_pending'
-        if is_paid_slot and not payment_is_done:
-            # The user requested to keep it as 'scheduled' but indicated payment not completed
-            return 'scheduled'
+        # 1. Paid slot logic: payment completion results in 'completed' status
+        if is_paid_slot:
+            if payment_is_done:
+                return 'completed'
+            # If payment not done, we default to 'scheduled' for active states
+            if obj.status in ['confirmed', 'completed', 'scheduled', 'verified']:
+                return 'scheduled'
         
-        # For non-paid swaps, or paid swaps where payment is done, check scheduled_date
+        # 2. Date-based logic for non-paid (or unpaid fallback) slots
         if obj.status in ['confirmed', 'completed', 'scheduled', 'verified']:
             from django.utils import timezone
             # If the scheduled date has passed, show as 'completed' (or verified if really finished)
@@ -748,14 +751,9 @@ class SwapHistoryDetailSerializer(serializers.ModelSerializer):
             is_paid = prom_type == 'paid' or price_val > 0
             
             if is_paid:
-                payment = getattr(obj, 'payment', None)
-                if payment and payment.status == 'completed':
-                    # Payment completed - check if scheduled_date has passed
-                    from django.utils import timezone
-                    if obj.scheduled_date and obj.scheduled_date <= timezone.now().date():
-                        return 'Swap Completed'
-                    # Otherwise, remain as scheduled until newsletter date
-                    return 'Swap Scheduled'
+                if self.get_payment_done(obj):
+                    return 'Swap Completed'
+                return 'Swap Scheduled'
         
         # For non-paid swaps, check scheduled_date
         if obj.status in ['confirmed', 'completed', 'scheduled']:
@@ -945,7 +943,7 @@ class TrackMySwapSerializer(serializers.ModelSerializer):
             'confirmed': 'Swap Scheduled',
             'sending': 'Sending in progress',
             'scheduled': 'Swap Scheduled',
-            'completed': 'Swap Scheduled',
+            'completed': 'Swap Completed',
             'verified': 'Swap Verified',
             'rejected': 'Swap Rejected',
         }
