@@ -5037,6 +5037,25 @@ class DirectPaymentView(APIView):
                 'detail': f'Receiver not found (checked User, Profile, and Swap ID {receiver_id or swap_id}).'
             }, status=status.HTTP_404_NOT_FOUND)
         
+        # 3. Auto-detect swap request if not already found
+        # Look for pending/scheduled swap requests where receiver is the slot owner (to be paid)
+        if not swap_request and receiver:
+            from django.db.models import Q
+            try:
+                # Find swap requests where:
+                # - Sender is the requester (paying for the swap)
+                # - Receiver is the slot owner (getting paid)
+                # - Status indicates payment is expected
+                swap_request = SwapRequest.objects.filter(
+                    Q(requester=sender, slot__user=receiver) |
+                    Q(requester=receiver, slot__user=sender)
+                ).filter(
+                    status__in=['pending', 'scheduled', 'confirmed'],
+                    slot__promotion_type='paid'
+                ).select_related('slot').first()
+            except:
+                pass  # No matching swap found, continue without linking
+        
         # Validate amount
         try:
             if amount is None or str(amount).strip() == '':
