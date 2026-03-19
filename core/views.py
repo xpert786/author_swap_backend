@@ -5991,6 +5991,7 @@ class AddFundsView(APIView):
                     logging.getLogger(__name__).warning(f"Saved card charge failed for user {user.id}: {str(e)}")
             
             # No saved card or card failed - use Stripe Checkout
+            # IMPORTANT: Set setup_future_usage so the card is saved for next time!
             checkout_session = stripe.checkout.Session.create(
                 payment_method_types=['card'],
                 line_items=[{
@@ -6014,6 +6015,9 @@ class AddFundsView(APIView):
                     'transaction_type': 'wallet_funding',
                     'user_id': str(user.id),
                     'amount': str(amount)
+                },
+                payment_intent_data={
+                    'setup_future_usage': 'off_session'  # Save card for future wallet funding!
                 }
             )
             
