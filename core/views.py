@@ -1748,6 +1748,8 @@ class SubscriberAnalyticsView(APIView):
                 "avg_engagement": verification.avg_engagement,
             },
             "campaign_analytics": CampaignAnalyticSerializer(campaigns, many=True).data,
+            "debug_campaigns_count": campaigns.count(),
+            "debug_campaigns_raw": list(campaigns.values('id', 'name', 'user_id')),
             "link_level_ctr": {
                 "results": link_level_ctr,
                 "pagination": {
