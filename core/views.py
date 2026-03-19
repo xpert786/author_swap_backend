@@ -1597,7 +1597,31 @@ class SubscriberAnalyticsView(APIView):
             'swap_requests__link_clicks'
         ).order_by('-send_date')
 
-        for slot in slots:
+        # Apply campaign_name filter if provided
+        campaign_filter = request.GET.get('campaign_name', None)
+        if campaign_filter:
+            # Filter slots based on campaign name pattern
+            # Campaign name format: "Newsletter: {genre} ({date})" or "Swap: {genre} ({date})"
+            if 'Newsletter:' in campaign_filter:
+                genre_part = campaign_filter.replace('Newsletter:', '').strip()
+                # Extract genre from "Children's Books (Mar 17, 2026)" format
+                if '(' in genre_part:
+                    genre = genre_part.split('(')[0].strip()
+                    slots = slots.filter(preferred_genre__icontains=genre)
+            elif 'Swap:' in campaign_filter:
+                genre_part = campaign_filter.replace('Swap:', '').strip()
+                if '(' in genre_part:
+                    genre = genre_part.split('(')[0].strip()
+                    slots = slots.filter(preferred_genre__icontains=genre)
+
+        # Apply pagination - show only 5 campaigns
+        page = int(request.GET.get('link_page', 1))
+        page_size = 5
+        start_idx = (page - 1) * page_size
+        end_idx = start_idx + page_size
+        paginated_slots = slots[start_idx:end_idx]
+
+        for slot in paginated_slots:
             links = []
             has_swaps = False
             for swap in slot.swap_requests.filter(status__in=['completed', 'verified', 'confirmed', 'sending', 'scheduled']):
@@ -1648,6 +1672,12 @@ class SubscriberAnalyticsView(APIView):
             date_str = slot.send_date.strftime("%b %-d, %Y") if slot.send_date else "TBD"
             campaign_name = f"{campaign_type}: {slot.get_preferred_genre_display()} ({date_str})"
             link_level_ctr.append({"campaign_id": slot.id, "campaign_name": campaign_name, "links": links})
+
+        # Calculate pagination info
+        total_campaigns = slots.count()
+        total_pages = (total_campaigns + page_size - 1) // page_size
+        has_next = page < total_pages
+        has_prev = page > 1
 
         return Response({
             "connection_status": {
@@ -1700,7 +1730,20 @@ class SubscriberAnalyticsView(APIView):
                 "avg_engagement": verification.avg_engagement,
             },
             "campaign_analytics": CampaignAnalyticSerializer(campaigns, many=True).data,
-            "link_level_ctr": link_level_ctr,
+            "link_level_ctr": {
+                "results": link_level_ctr,
+                "pagination": {
+                    "current_page": page,
+                    "total_pages": total_pages,
+                    "total_campaigns": total_campaigns,
+                    "has_next": has_next,
+                    "has_prev": has_prev,
+                    "page_size": page_size,
+                    "filters": {
+                        "campaign_name": campaign_filter
+                    } if campaign_filter else None
+                }
+            },
             "historical_trends": historical_trends
         })
 
