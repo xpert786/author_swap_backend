@@ -866,14 +866,21 @@ class RequestSwapPlacementView(APIView):
         )
         
         # If auto-approved, check if slot should be marked as booked
-        if initial_status == 'confirmed':
-            accepted_count = SwapRequest.objects.filter(
-                slot=slot, 
-                status__in=['completed', 'confirmed', 'verified', 'scheduled']
-            ).count()
-            if accepted_count >= slot.max_partners:
-                slot.status = 'booked'
-                slot.save(update_fields=['status'])
+        # Check if slot should be booked based on current accepted swaps
+        accepted_count = SwapRequest.objects.filter(
+            slot=slot,
+            status__in=['completed', 'confirmed', 'verified', 'scheduled']
+        ).count()
+
+        # Debug logging
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(f"[SLOT_STATUS DirectPayment] Slot {slot.id}: accepted_count={accepted_count}, max_partners={slot.max_partners}, current_status={slot.status}")
+
+        if accepted_count >= slot.max_partners:
+            slot.status = 'booked'
+            slot.save(update_fields=['status'])
+            logger.warning(f"[SLOT_STATUS DirectPayment] Slot {slot.id} set to BOOKED")
         
         # MailerLite Notification
         if initial_status == 'pending':
@@ -1128,14 +1135,26 @@ class AcceptSwapView(APIView):
             swap.status = 'scheduled'
         swap.save()
 
-        # Update the slot's status if it has reached max capacity
+        # Check if slot should be booked based on current accepted swaps
         accepted_count = SwapRequest.objects.filter(
-            slot=slot, 
+            slot=slot,
             status__in=['completed', 'confirmed', 'verified', 'scheduled']
         ).count()
+
+        # Debug logging
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(f"[SLOT_STATUS] Slot {slot.id}: accepted_count={accepted_count}, max_partners={slot.max_partners}, current_status={slot.status}")
+
         if accepted_count >= slot.max_partners:
             slot.status = 'booked'
             slot.save(update_fields=['status'])
+            logger.warning(f"[SLOT_STATUS] Slot {slot.id} set to BOOKED")
+        elif accepted_count < slot.max_partners and slot.status == 'booked':
+            # Revert to available if it was booked but now has room
+            slot.status = 'available'
+            slot.save(update_fields=['status'])
+            logger.warning(f"[SLOT_STATUS] Slot {slot.id} reverted to AVAILABLE")
 
         # Update CampaignAnalytic entry to change from Newsletter to Swap type
         from core.models import CampaignAnalytic
@@ -1409,9 +1428,16 @@ class CancelSwapView(APIView):
                 slot=slot, 
                 status__in=['completed', 'confirmed', 'verified', 'scheduled']
             ).count()
+
+            # Debug logging
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"[SLOT_STATUS CancelSwap] Slot {slot.id}: accepted_count={accepted_count}, max_partners={slot.max_partners}, current_status={slot.status}")
+
             if accepted_count < slot.max_partners:
                 slot.status = 'available'
                 slot.save(update_fields=['status'])
+                logger.warning(f"[SLOT_STATUS CancelSwap] Slot {slot.id} reverted to AVAILABLE")
 
         # Notification for slot owner
         from core.models import Notification
