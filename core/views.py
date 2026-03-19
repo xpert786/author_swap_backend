@@ -1281,6 +1281,21 @@ class TrackMySwapView(APIView):
                 swap.save()
 
         serializer = TrackMySwapSerializer(swap, context={'request': request})
+        
+        # Ensure link click tracking exists for this swap
+        from core.models import SwapLinkClick
+        if not swap.link_clicks.exists() and swap.book:
+            # Create default tracking link for the swap
+            destination_url = getattr(swap.book, 'amazon_url', None) or getattr(swap.book, 'website_url', None) or "#"
+            SwapLinkClick.objects.get_or_create(
+                swap=swap,
+                link_name=f"Swap Promo - {swap.book.title}",
+                destination_url=destination_url,
+                defaults={'clicks': 0}
+            )
+            # Refresh serializer to include the new link
+            serializer = TrackMySwapSerializer(swap, context={'request': request})
+        
         return Response(serializer.data)
 
 
@@ -1601,10 +1616,19 @@ class SubscriberAnalyticsView(APIView):
                     partner_name = swap.requester.username
                     if swap.requester.profiles.first():
                         partner_name = swap.requester.profiles.first().name
+                    
+                    # Get book URL and add tracking parameter
+                    book_url = getattr(swap.book, 'amazon_url', '#') or "#"
+                    if '?' in book_url and book_url != '#':
+                        tracked_url = f"{book_url}&swap_track={swap.id}"
+                    else:
+                        tracked_url = f"{book_url}?swap_track={swap.id}" if book_url != '#' else '#'
+                    
                     links.append({
                         "id": f"swap_{swap.id}",
                         "name": f"Swap Promo - {swap.book.title} ({partner_name})",
-                        "url": getattr(swap.book, 'amazon_url', '#') or "#",
+                        "url": tracked_url,
+                        "destination_url": book_url,
                         "clicks": 0,
                         "ctr": "0.0%",
                         "ctr_label": "Pending Data",
