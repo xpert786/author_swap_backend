@@ -97,7 +97,15 @@ class SlotPartnerSerializer(serializers.ModelSerializer):
         return obj.requested_book.title if obj.requested_book else None
 
     def get_partner_audience_size(self, obj):
-        return obj.offered_slot.audience_size if obj.offered_slot else 0
+        """Return active subscribers count from partner's offered slot"""
+        from core.models import SubscriberVerification
+        if obj.offered_slot:
+            try:
+                verification = SubscriberVerification.objects.get(user=obj.offered_slot.user)
+                return verification.active_subscribers
+            except SubscriberVerification.DoesNotExist:
+                return 0
+        return 0
 
     def get_you_send_date_formatted(self, obj):
         """Returns formatted date like 'Wednesday, May 15'"""
