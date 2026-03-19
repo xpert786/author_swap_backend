@@ -1543,6 +1543,11 @@ class SubscriberAnalyticsView(APIView):
         growth_data = SubscriberGrowth.objects.filter(user=request.user)
         campaigns = CampaignAnalytic.objects.filter(user=request.user).order_by('-date')[:10]
         
+        # DEBUG: Log campaign count
+        print(f"[DEBUG] Campaigns query for user {request.user.username} (ID: {request.user.id}): {campaigns.count()} campaigns")
+        for c in campaigns:
+            print(f"[DEBUG]   - {c.name} (ID: {c.id}, User: {c.user_id})")
+        
         # 1. Historical Trends aggregation & Metrics Calculation
         
         month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
