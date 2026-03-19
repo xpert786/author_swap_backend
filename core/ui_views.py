@@ -15,13 +15,14 @@ class StandardResultsSetPagination(PageNumberPagination):
         return Response({
             'links': {
                 'next': self.get_next_link(),
-                'previous': self.get_previous_link()
+                'previous': self.get_previous_link(),
+                'count': self.page.paginator.count,
+                'current_page': self.page.number,
+                'total_pages': self.page.paginator.num_pages,
+                'page_size': self.page_size,
+                'results': data
             },
-            'count': self.page.paginator.count,
-            'current_page': self.page.number,
-            'total_pages': self.page.paginator.num_pages,
-            'page_size': self.page_size,
-            'results': data
+            
         })
 
 from .models import NewsletterSlot, SwapRequest
