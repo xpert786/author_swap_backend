@@ -5904,26 +5904,23 @@ class AddFundsView(APIView):
             # Check for saved default card - use correct Stripe API field
             default_pm_id = None
             
-            # Try to get default payment method from customer
+            # Get the Stripe Customer to check for default payment method
             try:
-                customer_payment_methods = stripe.PaymentMethod.list(
-                    customer=cust_id,
-                    type='card'
-                )
+                stripe_customer = stripe.Customer.retrieve(cust_id)
+                default_pm_id = stripe_customer.get('invoice_settings', {}).get('default_payment_method')
                 
-                # Find the default payment method (marked as default in customer)
-                for pm in customer_payment_methods.data:
-                    if pm.metadata.get('is_default') == 'true':
-                        default_pm_id = pm.id
-                        break
-                
-                # If no default found, use the first card as fallback
-                if not default_pm_id and customer_payment_methods.data:
-                    default_pm_id = customer_payment_methods.data[0].id
-                    
+                # If no default set in invoice_settings, try to get from payment methods
+                if not default_pm_id:
+                    customer_payment_methods = stripe.PaymentMethod.list(
+                        customer=cust_id,
+                        type='card'
+                    )
+                    if customer_payment_methods.data:
+                        default_pm_id = customer_payment_methods.data[0].id
+                        
             except Exception as e:
                 import logging
-                logging.getLogger(__name__).warning(f"Error retrieving payment methods: {str(e)}")
+                logging.getLogger(__name__).warning(f"Error retrieving customer/payment methods: {str(e)}")
             
             if default_pm_id:
                 # User has a saved card, try direct charge
