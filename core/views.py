@@ -52,7 +52,38 @@ class CreateNewsletterSlotView(APIView):
             if verification:
                 audience_size = verification.audience_size
 
-            serializer.save(user=request.user, audience_size=audience_size)
+            slot = serializer.save(user=request.user, audience_size=audience_size)
+            
+            # Auto-create CampaignAnalytic entry for this slot
+            from core.models import CampaignAnalytic
+            from datetime import datetime
+            
+            # Format campaign name: "Newsletter: Genre (Date)" or "Swap: Genre (Date)"
+            genre_display = slot.get_preferred_genre_display()
+            date_str = slot.send_date.strftime("%b %-d, %Y") if slot.send_date else "TBD"
+            
+            # Check if slot has any confirmed swaps to determine type
+            has_swaps = slot.swap_requests.filter(
+                status__in=['completed', 'verified', 'confirmed', 'sending', 'scheduled']
+            ).exists()
+            campaign_type = "Swap" if has_swaps else "Newsletter"
+            campaign_name = f"{campaign_type}: {genre_display} ({date_str})"
+            
+            # Get active subscribers count for subscribers field
+            active_subscribers = 0
+            if verification:
+                active_subscribers = getattr(verification, 'active_subscribers', 0) or 0
+            
+            CampaignAnalytic.objects.create(
+                user=request.user,
+                name=campaign_name,
+                date=slot.send_date or datetime.now().date(),
+                subscribers=active_subscribers,
+                open_rate=0.0,
+                click_rate=0.0,
+                type='Recent'
+            )
+            
             return Response({
                 "message": "Newsletter slot created successfully.",
                 "data": serializer.data
@@ -1106,6 +1137,40 @@ class AcceptSwapView(APIView):
             slot.status = 'booked'
             slot.save(update_fields=['status'])
 
+        # Update CampaignAnalytic entry to change from Newsletter to Swap type
+        from core.models import CampaignAnalytic
+        from datetime import datetime
+        
+        genre_display = slot.get_preferred_genre_display()
+        date_str = slot.send_date.strftime("%b %-d, %Y") if slot.send_date else "TBD"
+        old_campaign_name = f"Newsletter: {genre_display} ({date_str})"
+        new_campaign_name = f"Swap: {genre_display} ({date_str})"
+        
+        # Try to update existing Newsletter campaign to Swap
+        try:
+            campaign = CampaignAnalytic.objects.filter(
+                user=slot.user,
+                name=old_campaign_name
+            ).first()
+            
+            if campaign:
+                campaign.name = new_campaign_name
+                campaign.save(update_fields=['name'])
+                print(f"[DEBUG] Updated campaign: {old_campaign_name} → {new_campaign_name}")
+            else:
+                # If no existing campaign found, create a new Swap campaign
+                CampaignAnalytic.objects.create(
+                    user=slot.user,
+                    name=new_campaign_name,
+                    date=slot.send_date or datetime.now().date(),
+                    subscribers=0,
+                    open_rate=0.0,
+                    click_rate=0.0,
+                    type='Recent'
+                )
+                print(f"[DEBUG] Created new Swap campaign: {new_campaign_name}")
+        except Exception as e:
+            print(f"[DEBUG] Error updating campaign: {e}")
 
         # MailerLite: move from Pending → Approved group
         requester_email = swap.requester.email
@@ -1826,6 +1891,70 @@ class CampaignDatesView(APIView):
             "campaign_dates": campaign_dates,
             "total": len(campaign_dates)
         })
+
+
+class CampaignAnalyticCreateView(APIView):
+    """
+    POST /api/campaign-analytics/create/
+    Creates a new CampaignAnalytic entry for the authenticated user.
+    Body: {
+        "name": "Campaign Name",
+        "date": "2026-03-19",
+        "subscribers": 7251,
+        "open_rate": 42.5,
+        "click_rate": 8.7,
+        "type": "Recent"
+    }
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        from core.models import CampaignAnalytic
+        
+        # Get data from request
+        name = request.data.get('name')
+        date_str = request.data.get('date')
+        subscribers = request.data.get('subscribers', 0)
+        open_rate = request.data.get('open_rate', 0.0)
+        click_rate = request.data.get('click_rate', 0.0)
+        campaign_type = request.data.get('type', 'Recent')
+        
+        # Validate required fields
+        if not name:
+            return Response({"error": "name is required"}, status=status.HTTP_400_BAD_REQUEST)
+        if not date_str:
+            return Response({"error": "date is required"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Parse date
+        from datetime import datetime
+        try:
+            date_obj = datetime.strptime(date_str, '%Y-%m-%d').date()
+        except ValueError:
+            return Response({"error": "date must be in YYYY-MM-DD format"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Create campaign analytic
+        campaign = CampaignAnalytic.objects.create(
+            user=request.user,
+            name=name,
+            date=date_obj,
+            subscribers=int(subscribers),
+            open_rate=float(open_rate),
+            click_rate=float(click_rate),
+            type=campaign_type
+        )
+        
+        return Response({
+            "message": "Campaign analytic created successfully",
+            "campaign": {
+                "id": campaign.id,
+                "name": campaign.name,
+                "date": campaign.date.isoformat(),
+                "subscribers": campaign.subscribers,
+                "open_rate": campaign.open_rate,
+                "click_rate": campaign.click_rate,
+                "type": campaign.type
+            }
+        }, status=status.HTTP_201_CREATED)
 
 
 # =====================================================================

@@ -8,6 +8,7 @@ from .views import (
     SwapManagementListView, AcceptSwapView, RejectSwapView, RestoreSwapView,
     SwapHistoryDetailView, TrackMySwapView, CancelSwapView, AuthorReputationView,
     SubscriberVerificationView, ConnectMailerLiteView, SubscriberAnalyticsView, CampaignDatesView,
+    CampaignAnalyticCreateView,
     RequestSwapPlacementView, AuthorDashboardView, AudienceSizeView,
     AllSwapRequestsView,
     EmailListView, ComposeEmailView, EmailDetailView, EmailActionView,
@@ -66,6 +67,7 @@ urlpatterns = [
     path('connect-mailerlite/', ConnectMailerLiteView.as_view(), name='connect-mailerlite'),
     path('subscriber-analytics/', SubscriberAnalyticsView.as_view(), name='subscriber-analytics'),
     path('campaign-dates/', CampaignDatesView.as_view(), name='campaign-dates'),
+    path('campaign-analytics/create/', CampaignAnalyticCreateView.as_view(), name='campaign-analytics-create'),
     
     # Dashboard
     path('author-dashboard/', AuthorDashboardView.as_view(), name='author-dashboard'),
