@@ -1322,6 +1322,7 @@ class EmailDetailSerializer(serializers.ModelSerializer):
     Full serializer for reading a single email.
     """
     sender_name = serializers.SerializerMethodField()
+    sender_email = serializers.SerializerMethodField()
     sender_profile_picture = serializers.SerializerMethodField()
     recipient_name = serializers.SerializerMethodField()
     recipient_email = serializers.SerializerMethodField()
@@ -1333,7 +1334,7 @@ class EmailDetailSerializer(serializers.ModelSerializer):
         model = Email
         fields = [
             'id', 'subject', 'body', 'folder', 'is_read', 'is_starred', 'is_draft',
-            'sender_name', 'sender_profile_picture',
+            'sender_name', 'sender_email', 'sender_profile_picture',
             'recipient_name', 'recipient_email', 'recipient_profile_picture',
             'attachment',
             'formatted_date', 'sent_at', 'created_at',
@@ -1343,6 +1344,9 @@ class EmailDetailSerializer(serializers.ModelSerializer):
     def get_sender_name(self, obj):
         profile = obj.sender.profiles.first()
         return profile.name if profile else obj.sender.username
+
+    def get_sender_email(self, obj):
+        return obj.sender.email
 
     def get_sender_profile_picture(self, obj):
         request = self.context.get('request')

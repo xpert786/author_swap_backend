@@ -5779,13 +5779,29 @@ class WithdrawFundsView(APIView):
             # For now, we will allow it to proceed for development/testing
             pass
         
+        # Get default payment method details
+        default_pm_id = stripe_customer.get('invoice_settings', {}).get('default_payment_method')
+        withdrawal_destination = "default payment method"
+        
+        if default_pm_id:
+            try:
+                pm = stripe.PaymentMethod.retrieve(default_pm_id)
+                if pm.type == 'card':
+                    card = pm.card
+                    withdrawal_destination = f"card ending in {card.last4} ({card.brand.title()} ****{card.last4})"
+                elif pm.type == 'bank_account':
+                    bank = pm.bank_account
+                    withdrawal_destination = f"bank account ending in {bank.last4} ({bank.bank_name})"
+            except Exception:
+                withdrawal_destination = "default payment method"
+        
         # Create withdrawal transaction
         transaction = PaymentTransaction.objects.create(
             sender=user,
             receiver=user,  # Self-transaction for withdrawal
             amount=amount,
             transaction_type='withdrawal',
-            description=f'Withdrawal of ${amount} to bank account'
+            description=f'Withdrawal of ${amount} to {withdrawal_destination}'
         )
         
         try:
