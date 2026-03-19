@@ -1597,13 +1597,21 @@ class SubscriberAnalyticsView(APIView):
         verification, created = SubscriberVerification.objects.get_or_create(user=request.user)
         print(f"[DEBUG] Before sync - active_subscribers: {verification.active_subscribers}, audience_size: {verification.audience_size}")
         
-        # Trigger real-time sync (this calls get_subscriber_counts_by_status and updates the model)
-        verification = sync_subscriber_analytics(request.user)
+        # Check if user wants to skip sync (for faster loading)
+        skip_sync = request.GET.get('skip_sync', '').lower() in ['true', '1', 'yes']
         
-        print(f"[DEBUG] After sync - active_subscribers: {verification.active_subscribers}, audience_size: {verification.audience_size}")
-        
-        # After sync, ensure we have the latest data
-        verification.refresh_from_db()
+        if skip_sync:
+            # Use cached data without syncing
+            from core.models import SubscriberVerification
+            verification, _ = SubscriberVerification.objects.get_or_create(user=request.user)
+            print(f"[DEBUG] Skip sync - using cached data for user {request.user.username}")
+        else:
+            # Trigger real-time sync (this calls get_subscriber_counts_by_status and updates the model)
+            verification = sync_subscriber_analytics(request.user)
+            print(f"[DEBUG] After sync - active_subscribers: {verification.active_subscribers}, audience_size: {verification.audience_size}")
+            
+            # After sync, ensure we have the latest data
+            verification.refresh_from_db()
         
         growth_data = SubscriberGrowth.objects.filter(user=request.user)
         
@@ -4128,10 +4136,10 @@ class ConfirmSwapPaymentView(APIView):
         payment.receiver_confirmed_at = timezone.now()
         payment.save(update_fields=['receiver_confirmed', 'receiver_confirmed_at'])
 
-        # Update swap status to completed
-        swap_request.status = 'completed'
-        swap_request.completed_at = timezone.now()
-        swap_request.save(update_fields=['status', 'completed_at'])
+        # Update swap status to scheduled (payment confirmed, swap scheduled)
+        if swap_request.status in ['pending', 'confirmed']:
+            swap_request.status = 'scheduled'
+            swap_request.save(update_fields=['status'])
 
         # AWARD REPUTATION POINTS
         from core.services.reputation_service import ReputationService
@@ -4141,9 +4149,9 @@ class ConfirmSwapPaymentView(APIView):
         # Create notification for payer
         Notification.objects.create(
             recipient=swap_request.requester,
-            title="Payment Confirmed & Swap Completed! ✅",
+            title="Payment Confirmed & Swap Scheduled! ✅",
             badge="SWAP",
-            message=f"{request.user.username} has confirmed receipt of your payment. The swap is now officially completed!",
+            message=f"{request.user.username} has confirmed receipt of your payment. The swap is now scheduled!",
             action_url=f"/dashboard/swaps/track/{swap_request.id}/"
         )
 
@@ -5599,21 +5607,20 @@ class DirectPaymentView(APIView):
                         logger = logging.getLogger(__name__)
                         logger.info(f"Payment completed for swap {swap_request.id}, current status: {swap_request.status}")
                         
-                        if swap_request.status in ['pending', 'scheduled', 'confirmed', 'accepted']:
+                        if swap_request.status in ['pending', 'confirmed', 'accepted']:
                             old_status = swap_request.status
-                            swap_request.status = 'completed'
-                            swap_request.completed_at = timezone.now()
+                            swap_request.status = 'scheduled'
                             swap_request.save()
                             
-                            logger.info(f"Swap {swap_request.id} status updated from {old_status} to completed")
+                            logger.info(f"Swap {swap_request.id} status updated from {old_status} to scheduled")
                             
                             # Create notifications for swap completion
                             from core.models import Notification
                             Notification.objects.create(
                                 recipient=swap_request.requester,
-                                title="✅ Swap Completed!",
+                                title="✅ Payment Confirmed!",
                                 badge="SWAP",
-                                message=f"Your swap with {swap_request.slot.user.username} has been completed successfully.",
+                                message=f"Your payment for swap with {swap_request.slot.user.username} has been confirmed. The swap is now scheduled!",
                                 action_url=f"/dashboard/swaps/track/{swap_request.id}/"
                             )
                             
