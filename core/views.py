@@ -420,8 +420,17 @@ class NotificationListView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        # Fetch notifications for current user
-        notifications = Notification.objects.filter(recipient=request.user)
+        # Only show notifications from the last 48 hours
+        from django.utils import timezone
+        from datetime import timedelta
+        
+        cutoff_time = timezone.now() - timedelta(hours=48)
+        
+        # Fetch notifications for current user within 48 hours
+        notifications = Notification.objects.filter(
+            recipient=request.user,
+            created_at__gte=cutoff_time
+        )
         serializer = NotificationSerializer(notifications, many=True)
         
         # Grouping logic for the frontend "Today/Yesterday" view
