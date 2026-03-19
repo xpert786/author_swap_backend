@@ -5909,21 +5909,39 @@ class AddFundsView(APIView):
                 stripe_customer = stripe.Customer.retrieve(cust_id)
                 default_pm_id = stripe_customer.get('invoice_settings', {}).get('default_payment_method')
                 
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(f"[DEBUG AddFunds] Customer {cust_id} default_pm_id from invoice_settings: {default_pm_id}")
+                
                 # If no default set in invoice_settings, try to get from payment methods
                 if not default_pm_id:
                     customer_payment_methods = stripe.PaymentMethod.list(
                         customer=cust_id,
                         type='card'
                     )
+                    logger.warning(f"[DEBUG AddFunds] Found {len(customer_payment_methods.data)} payment methods")
                     if customer_payment_methods.data:
                         default_pm_id = customer_payment_methods.data[0].id
+                        logger.warning(f"[DEBUG AddFunds] Using first card as fallback: {default_pm_id}")
+                    else:
+                        logger.warning(f"[DEBUG AddFunds] No payment methods found for customer {cust_id}")
                         
             except Exception as e:
                 import logging
                 logging.getLogger(__name__).warning(f"Error retrieving customer/payment methods: {str(e)}")
             
             if default_pm_id:
-                # User has a saved card, try direct charge
+                # User has a saved card, set it as default on customer for future use
+                try:
+                    stripe.Customer.modify(
+                        cust_id,
+                        invoice_settings={'default_payment_method': default_pm_id}
+                    )
+                    logger.warning(f"[DEBUG AddFunds] Set default payment method {default_pm_id} on customer {cust_id}")
+                except Exception as e:
+                    logger.warning(f"[DEBUG AddFunds] Could not set default payment method: {str(e)}")
+                
+                # Try direct charge
                 try:
                     payment_intent = stripe.PaymentIntent.create(
                         amount=int(amount * 100),
