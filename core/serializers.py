@@ -400,12 +400,12 @@ class SwapManagementSerializer(serializers.ModelSerializer):
         payment_is_done = self.get_payment_done(obj)
         
         # 1. Paid slot logic: payment completion results in 'completed' status
-        if is_paid_slot:
+        # BUT only if swap is accepted (not pending)
+        if is_paid_slot and obj.status in ['confirmed', 'scheduled', 'verified']:
             if payment_is_done:
                 return 'completed'
-            # If payment not done, we default to 'scheduled' for active states
-            if obj.status in ['confirmed', 'completed', 'scheduled', 'verified']:
-                return 'scheduled'
+            # If payment not done, show as scheduled
+            return 'scheduled'
         
         # 2. Date-based logic for non-paid (or unpaid fallback) slots
         if obj.status in ['confirmed', 'completed', 'scheduled', 'verified']:
