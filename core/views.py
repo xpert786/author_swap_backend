@@ -1748,6 +1748,50 @@ class SubscriberAnalyticsView(APIView):
         })
 
 
+class CampaignDatesView(APIView):
+    """
+    GET /api/campaign-dates/
+    Returns list of campaign dates for dropdown filter
+    Format: "Science Fiction (Apr 1, 2026)" instead of full "Newsletter: Science Fiction (Apr 1, 2026)"
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from core.models import NewsletterSlot
+        
+        # Get all slots for the user
+        slots = NewsletterSlot.objects.filter(user=request.user).order_by('-send_date')
+        
+        campaign_dates = []
+        for slot in slots:
+            # Determine campaign type
+            has_swaps = slot.swap_requests.filter(status__in=['completed', 'verified', 'confirmed', 'sending', 'scheduled']).exists()
+            campaign_type = "Swap" if has_swaps else "Newsletter"
+            
+            # Format date
+            date_str = slot.send_date.strftime("%b %-d, %Y") if slot.send_date else "TBD"
+            
+            # Create campaign name
+            campaign_name = f"{campaign_type}: {slot.get_preferred_genre_display()} ({date_str})"
+            
+            # Create display name (without "Newsletter:" or "Swap:" prefix)
+            display_name = f"{slot.get_preferred_genre_display()} ({date_str})"
+            
+            campaign_dates.append({
+                "value": campaign_name,  # Full name for filtering
+                "label": display_name,   # Short name for display
+                "campaign_id": slot.id,
+                "date": date_str,
+                "genre": slot.get_preferred_genre_display(),
+                "type": campaign_type
+            })
+        
+        return Response({
+            "campaign_dates": campaign_dates,
+            "total": len(campaign_dates)
+        })
+
+
 # =====================================================================
 # AUTHOR DASHBOARD (Figma: "Author Dashboard" — main landing page)
 # =====================================================================

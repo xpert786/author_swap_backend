@@ -5,6 +5,11 @@ from rest_framework.filters import SearchFilter
 from django_filters.rest_framework import DjangoFilterBackend
 from django.db.models import Q
 
+class StandardResultsSetPagination(PageNumberPagination):
+    page_size = 9
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
 from .models import NewsletterSlot, SwapRequest
 from .ui_serializers import SlotExploreSerializer, SlotDetailsSerializer, SwapArrangementSerializer
 from .views import NewsletterSlotFilter
@@ -17,8 +22,7 @@ class SlotExploreView(ListAPIView):
     Pagination: 9 items per page
     """
     serializer_class = SlotExploreSerializer
-    pagination_class = PageNumberPagination
-    page_size = 9
+    pagination_class = StandardResultsSetPagination
     permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend, SearchFilter]
     filterset_class = NewsletterSlotFilter

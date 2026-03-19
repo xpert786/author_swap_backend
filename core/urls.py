@@ -7,7 +7,7 @@ from .views import (
     MyPotentialBooksView, SwapPartnerDetailView, RecentSwapHistoryView, NotificationUnreadCountView,
     SwapManagementListView, AcceptSwapView, RejectSwapView, RestoreSwapView,
     SwapHistoryDetailView, TrackMySwapView, CancelSwapView, AuthorReputationView,
-    SubscriberVerificationView, ConnectMailerLiteView, SubscriberAnalyticsView,
+    SubscriberVerificationView, ConnectMailerLiteView, SubscriberAnalyticsView, CampaignDatesView,
     RequestSwapPlacementView, AuthorDashboardView, AudienceSizeView,
     AllSwapRequestsView,
     EmailListView, ComposeEmailView, EmailDetailView, EmailActionView,
@@ -65,6 +65,7 @@ urlpatterns = [
     path('subscriber-verification/', SubscriberVerificationView.as_view(), name='subscriber-verification'),
     path('connect-mailerlite/', ConnectMailerLiteView.as_view(), name='connect-mailerlite'),
     path('subscriber-analytics/', SubscriberAnalyticsView.as_view(), name='subscriber-analytics'),
+    path('campaign-dates/', CampaignDatesView.as_view(), name='campaign-dates'),
     
     # Dashboard
     path('author-dashboard/', AuthorDashboardView.as_view(), name='author-dashboard'),
