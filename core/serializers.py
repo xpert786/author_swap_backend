@@ -391,6 +391,10 @@ class SwapManagementSerializer(serializers.ModelSerializer):
         # Show as 'sending' if the swap is pending and the current user is the requester
         if request and obj.status == 'pending' and obj.requester_id == request.user.id:
             return 'sending'
+        
+        # If status is already completed, show it (for free slots accepted immediately)
+        if obj.status == 'completed':
+            return 'completed'
             
         is_paid_slot = self.get_eligible_for_pay(obj)
         payment_is_done = self.get_payment_done(obj)
@@ -418,7 +422,10 @@ class SwapManagementSerializer(serializers.ModelSerializer):
             return False
         prom_type = str(obj.slot.promotion_type).lower() if obj.slot.promotion_type else ''
         price_val = obj.slot.price or 0
-        return prom_type == 'paid' or price_val > 0
+        # Free slot: promotion_type is 'free' OR price is 0/null
+        # Paid slot: promotion_type is 'paid' OR price > 0
+        is_free = prom_type == 'free' or price_val == 0
+        return not is_free  # Return True for paid, False for free
 
     def get_price(self, obj):
         return float(obj.slot.price) if obj.slot and obj.slot.price else 0.00

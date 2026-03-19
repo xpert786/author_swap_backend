@@ -21,6 +21,7 @@ class SlotExploreSerializer(serializers.ModelSerializer):
     """Serializer for Figma Screen 3 - Swap Partner Explorer"""
     author = AuthorProfileSerializer(source='user.profiles.first', read_only=True)
     current_partners_count = serializers.SerializerMethodField()
+    audience_size = serializers.SerializerMethodField()  # Override to use active subscribers
 
     class Meta:
         model = NewsletterSlot
@@ -29,6 +30,15 @@ class SlotExploreSerializer(serializers.ModelSerializer):
             'status', 'promotion_type', 'price', 'preferred_genre', 
             'current_partners_count', 'max_partners', 'author'
         ]
+
+    def get_audience_size(self, obj):
+        """Return active subscribers count instead of total audience size"""
+        from core.models import SubscriberVerification
+        try:
+            verification = SubscriberVerification.objects.get(user=obj.user)
+            return verification.active_subscribers
+        except SubscriberVerification.DoesNotExist:
+            return 0
 
     def get_current_partners_count(self, obj):
         return obj.swap_requests.filter(status__in=['confirmed', 'verified', 'scheduled', 'completed']).count()
