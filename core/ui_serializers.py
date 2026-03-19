@@ -57,7 +57,11 @@ class SlotPartnerSerializer(serializers.ModelSerializer):
     partner_audience_size = serializers.SerializerMethodField()
 
     def get_status(self, obj):
-        if obj.status in ['confirmed', 'completed']:
+        # For free slots with completed status, show as completed
+        if obj.status == 'completed':
+            return 'completed'
+        # For confirmed or other statuses, show as scheduled
+        if obj.status in ['confirmed']:
             return 'scheduled'
         return obj.status
 
@@ -131,6 +135,7 @@ class SlotDetailsSerializer(serializers.ModelSerializer):
     author = AuthorDetailedProfileSerializer(source='user.profiles.first', read_only=True)
     current_partners_count = serializers.SerializerMethodField()
     swap_partners = serializers.SerializerMethodField()
+    audience_size = serializers.SerializerMethodField()  # Override to use active subscribers
     
     class Meta:
         model = NewsletterSlot
@@ -138,6 +143,15 @@ class SlotDetailsSerializer(serializers.ModelSerializer):
             'id', 'author', 'send_date', 'send_time', 'audience_size', 'visibility', 
             'status', 'preferred_genre', 'current_partners_count', 'max_partners', 'swap_partners'
         ]
+
+    def get_audience_size(self, obj):
+        """Return active subscribers count instead of total audience size"""
+        from core.models import SubscriberVerification
+        try:
+            verification = SubscriberVerification.objects.get(user=obj.user)
+            return verification.active_subscribers
+        except SubscriberVerification.DoesNotExist:
+            return 0
 
     def get_current_partners_count(self, obj):
         return obj.swap_requests.filter(status__in=['confirmed', 'verified', 'completed', 'sending', 'scheduled']).count()

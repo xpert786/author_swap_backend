@@ -583,6 +583,7 @@ class SwapPartnerSerializer(serializers.ModelSerializer):
     analytics_breakdown = serializers.SerializerMethodField()
     reputation_breakdown = serializers.SerializerMethodField()
     recent_swap_history = serializers.SerializerMethodField()
+    audience_size = serializers.SerializerMethodField()  # Override to use active subscribers
 
     formatted_time = serializers.SerializerMethodField()
     formatted_date = serializers.SerializerMethodField()
@@ -596,6 +597,15 @@ class SwapPartnerSerializer(serializers.ModelSerializer):
             'promotion_type', 'partner_requirements', 'analytics_summary',
             'analytics_breakdown', 'reputation_breakdown', 'recent_swap_history'
         ]
+
+    def get_audience_size(self, obj):
+        """Return active subscribers count instead of total audience size"""
+        from core.models import SubscriberVerification
+        try:
+            verification = SubscriberVerification.objects.get(user=obj.user)
+            return verification.active_subscribers
+        except SubscriberVerification.DoesNotExist:
+            return 0
 
 
 

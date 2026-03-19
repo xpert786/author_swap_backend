@@ -1086,12 +1086,18 @@ class AcceptSwapView(APIView):
         if swap.status not in ['pending']:
             return Response({"detail": f"Cannot accept a swap in '{swap.status}' state."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Update status directly to scheduled when accepted
-        swap.status = 'scheduled'
+        # Check if slot is free (no payment required)
+        slot = swap.slot
+        is_free_slot = slot.promotion_type == 'free' or (slot.price is None or slot.price == 0)
+        
+        # Update status: if free, mark as completed; otherwise scheduled
+        if is_free_slot:
+            swap.status = 'completed'
+        else:
+            swap.status = 'scheduled'
         swap.save()
 
         # Update the slot's status if it has reached max capacity
-        slot = swap.slot
         accepted_count = SwapRequest.objects.filter(
             slot=slot, 
             status__in=['completed', 'confirmed', 'verified', 'scheduled']
@@ -1108,17 +1114,24 @@ class AcceptSwapView(APIView):
         except Exception:
             pass  # Non-critical; log internally
 
-        # Notification for requester
+        # Notification for requester - different message for free vs paid
+        if is_free_slot:
+            notification_title = "Swap Request Completed! ✅"
+            notification_message = f"Great news! {request.user.username} has accepted your swap request for their free {swap.slot.get_preferred_genre_display()} slot. The swap is now completed!"
+        else:
+            notification_title = "Swap Request Accepted! ✅"
+            notification_message = f"Good news! {request.user.username} has accepted your swap request for their {swap.slot.get_preferred_genre_display()} slot. Payment required to confirm."
+        
         Notification.objects.create(
             recipient=swap.requester,
-            title="Swap Request Accepted! ✅",
+            title=notification_title,
             badge="SWAP",
-            message=f"Good news! {request.user.username} has accepted your swap request for their {swap.slot.get_preferred_genre_display()} slot.",
+            message=notification_message,
             action_url=f"/dashboard/swaps/track/{swap.id}/"
         )
 
         return Response({
-            "detail": "Swap request accepted.",
+            "detail": f"Swap request accepted. Status: {swap.status}.",
             "swap": SwapManagementSerializer(swap, context={'request': request}).data
         })
 
