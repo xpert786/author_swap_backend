@@ -46,6 +46,26 @@ class SlotExploreView(ListAPIView):
     def get_queryset(self):
         # Exclude the logged-in user's own slots from the explore feed
         return NewsletterSlot.objects.exclude(user=self.request.user).order_by('-created_at')
+    
+    def list(self, request, *args, **kwargs):
+        # Get the paginated response first
+        queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
+        
+        # Get campaign analytics for the logged-in user
+        from core.models import CampaignAnalytic
+        from core.serializers import CampaignAnalyticSerializer
+        
+        campaigns = CampaignAnalytic.objects.filter(user=request.user).order_by('-date')[:5]
+        campaign_data = CampaignAnalyticSerializer(campaigns, many=True).data
+        
+        # Return paginated response with campaign analytics
+        response = self.get_paginated_response(self.get_serializer(page, many=True).data)
+        
+        # Add campaign_analytics to the response data
+        response.data['campaign_analytics'] = campaign_data
+        
+        return response
 
 class SlotDetailsView(RetrieveUpdateAPIView):
     """

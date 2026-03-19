@@ -5321,6 +5321,17 @@ class WalletTransactionHistoryView(APIView):
         if expired_transactions.exists():
             expired_transactions.update(status='cancelled')
         
+        # Clean up pending direct_payment transactions older than 30 minutes
+        expired_direct_payments = PaymentTransaction.objects.filter(
+            sender=user,
+            transaction_type='direct_payment',
+            status='pending',
+            stripe_payment_intent_id__startswith='cs_',
+            created_at__lt=expiry_time
+        )
+        if expired_direct_payments.exists():
+            expired_direct_payments.update(status='cancelled')
+        
         # Also clean up transactions with checkout session IDs that are still pending
         checkout_expired_transactions = PaymentTransaction.objects.filter(
             sender=user,
@@ -5365,9 +5376,12 @@ class WalletTransactionHistoryView(APIView):
                     transaction.save()
         
         # Get all transactions involving this user using Q objects for efficiency and SQLite compatibility
+        # Filter to show only wallet-related transactions (bonus/add_funds, withdrawal)
         from django.db.models import Q
+        wallet_transaction_types = ['bonus', 'withdrawal', 'add_funds']
         all_transactions = PaymentTransaction.objects.filter(
-            Q(sender=user) | Q(receiver=user)
+            Q(sender=user) | Q(receiver=user),
+            transaction_type__in=wallet_transaction_types
         ).order_by('-created_at')
         
         # Apply filters
@@ -5380,10 +5394,12 @@ class WalletTransactionHistoryView(APIView):
             all_transactions = all_transactions.filter(status=status_filter)
         
         # By default, exclude cancelled and pending wallet funding transactions unless explicitly requested
+        # Also exclude pending direct_payment transactions with checkout session IDs (user hasn't paid yet)
         if not status_filter:
             all_transactions = all_transactions.exclude(
                 Q(status='cancelled') | 
-                Q(transaction_type='bonus', status='pending')
+                Q(transaction_type='bonus', status='pending') |
+                Q(transaction_type='direct_payment', status='pending', stripe_payment_intent_id__startswith='cs_')
             )
         
         serializer = PaymentTransactionSerializer(all_transactions, many=True, context={'request': request})
