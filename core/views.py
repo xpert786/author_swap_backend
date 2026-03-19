@@ -3273,16 +3273,38 @@ def _get_or_create_stripe_customer(user, user_sub):
     Persists the customer ID back to user_sub if provided.
     Returns: stripe_customer_id (str)
     """
+    # 1. Try to get existing ID from UserSubscription or UserProfile
     customer_id = user_sub.stripe_customer_id if user_sub else None
+    
+    if not customer_id:
+        try:
+            # Check authentication.models.UserProfile
+            if hasattr(user, 'profile') and user.profile.stripe_customer_id:
+                customer_id = user.profile.stripe_customer_id
+        except Exception:
+            pass
 
+    # 2. If an ID exists, verify it's still valid in Stripe
     if customer_id:
         try:
             stripe.Customer.retrieve(customer_id)
-            return customer_id          # still valid
+            # Valid case - Sync it across both models for consistency
+            if user_sub and not user_sub.stripe_customer_id:
+                user_sub.stripe_customer_id = customer_id
+                user_sub.save(update_fields=['stripe_customer_id'])
+            
+            try:
+                if hasattr(user, 'profile') and not user.profile.stripe_customer_id:
+                    user.profile.stripe_customer_id = customer_id
+                    user.profile.save(update_fields=['stripe_customer_id'])
+            except Exception:
+                pass
+                
+            return customer_id
         except stripe.error.InvalidRequestError:
-            customer_id = None          # stale — fall through to create
+            customer_id = None          # stale ID from a different account
 
-    # Create a brand-new customer
+    # 3. No valid customer found anywhere, create a new one
     customer = stripe.Customer.create(
         email=user.email,
         name=user.get_full_name() or user.username,
@@ -3290,9 +3312,17 @@ def _get_or_create_stripe_customer(user, user_sub):
     )
     customer_id = customer.id
 
+    # 4. Save the new ID in both locations
     if user_sub:
         user_sub.stripe_customer_id = customer_id
         user_sub.save(update_fields=['stripe_customer_id'])
+    
+    try:
+        if hasattr(user, 'profile'):
+            user.profile.stripe_customer_id = customer_id
+            user.profile.save(update_fields=['stripe_customer_id'])
+    except Exception:
+        pass
 
     return customer_id
 
@@ -5879,33 +5909,9 @@ class AddFundsView(APIView):
             # Get or create user's wallet
             wallet, created = UserWallet.objects.get_or_create(user=user)
             
-            # Get or create Stripe Customer
-            from authentication.models import UserProfile
-            user_profile, _ = UserProfile.objects.get_or_create(user=user)
-            
-            if user_profile.stripe_customer_id:
-                try:
-                    stripe_customer = stripe.Customer.retrieve(user_profile.stripe_customer_id)
-                    cust_id = stripe_customer.id
-                except stripe.error.InvalidRequestError:
-                    # Customer ID is stale, create new one
-                    stripe_customer = stripe.Customer.create(
-                        email=user.email,
-                        name=user.get_full_name() or user.username,
-                        metadata={'user_id': str(user.id)}
-                    )
-                    user_profile.stripe_customer_id = stripe_customer.id
-                    user_profile.save()
-                    cust_id = stripe_customer.id
-            else:
-                stripe_customer = stripe.Customer.create(
-                    email=user.email,
-                    name=user.get_full_name() or user.username,
-                    metadata={'user_id': str(user.id)}
-                )
-                user_profile.stripe_customer_id = stripe_customer.id
-                user_profile.save()
-                cust_id = stripe_customer.id
+            # Get or create Stripe Customer using standard helper
+            user_sub = getattr(user, 'subscription', None)
+            cust_id = _get_or_create_stripe_customer(user, user_sub)
             
             # Create a pending transaction record
             transaction = PaymentTransaction.objects.create(
