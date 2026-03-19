@@ -1541,7 +1541,25 @@ class SubscriberAnalyticsView(APIView):
         verification.refresh_from_db()
         
         growth_data = SubscriberGrowth.objects.filter(user=request.user)
-        campaigns = CampaignAnalytic.objects.filter(user=request.user).order_by('-date')[:10]
+        
+        # Get campaign filter parameter for tabs (recent, top, swap)
+        campaign_tab = request.GET.get('campaign_tab', 'recent')
+        
+        # Base query - all campaigns for user
+        campaigns_qs = CampaignAnalytic.objects.filter(user=request.user)
+        
+        # Apply filtering based on tab
+        if campaign_tab == 'top':
+            # Top performing: highest open rate + click rate
+            campaigns = campaigns_qs.order_by('-open_rate', '-click_rate')[:10]
+        elif campaign_tab == 'swap':
+            # Swap campaigns: filter by name containing swap-related keywords
+            campaigns = campaigns_qs.filter(
+                name__icontains='swap'
+            ).order_by('-date')[:10]
+        else:
+            # Recent (default): most recent by date
+            campaigns = campaigns_qs.order_by('-date')[:10]
         
         # DEBUG: Log campaign count
         print(f"[DEBUG] Campaigns query for user {request.user.username} (ID: {request.user.id}): {campaigns.count()} campaigns")
@@ -1748,8 +1766,6 @@ class SubscriberAnalyticsView(APIView):
                 "avg_engagement": verification.avg_engagement,
             },
             "campaign_analytics": CampaignAnalyticSerializer(campaigns, many=True).data,
-            "debug_campaigns_count": campaigns.count(),
-            "debug_campaigns_raw": list(campaigns.values('id', 'name', 'user_id')),
             "link_level_ctr": {
                 "results": link_level_ctr,
                 "pagination": {
