@@ -1,5 +1,6 @@
 from rest_framework.generics import ListAPIView, RetrieveAPIView, RetrieveUpdateAPIView
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.filters import SearchFilter
 from django_filters.rest_framework import DjangoFilterBackend
 from django.db.models import Q
@@ -12,8 +13,12 @@ class SlotExploreView(ListAPIView):
     """
     Figma Screen 3: Swap Partner Explorer Page
     Endpoint: /api/slots/explore/
+    Returns paginated list of available newsletter slots for swapping.
+    Pagination: 9 items per page
     """
     serializer_class = SlotExploreSerializer
+    pagination_class = PageNumberPagination
+    page_size = 9
     permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend, SearchFilter]
     filterset_class = NewsletterSlotFilter
