@@ -5002,24 +5002,6 @@ class SavedPaymentMethodsView(APIView):
             user = request.user
             stripe_customer_id = _get_stripe_customer_id(user)
 
-            # ── Fallback: search Stripe by email to find orphaned customer ──
-            if not stripe_customer_id:
-                customers = stripe.Customer.list(email=user.email, limit=5)
-                if customers.data:
-                    # Pick the most recently created one
-                    stripe_customer_id = customers.data[0].id
-                    # Persist so we don't have to search again
-                    user_sub = getattr(user, 'subscription', None)
-                    if user_sub:
-                        user_sub.stripe_customer_id = stripe_customer_id
-                        user_sub.save(update_fields=['stripe_customer_id'])
-                    else:
-                        try:
-                            user.profile.stripe_customer_id = stripe_customer_id
-                            user.profile.save(update_fields=['stripe_customer_id'])
-                        except Exception:
-                            pass
-
             if not stripe_customer_id:
                 return Response([])
 
