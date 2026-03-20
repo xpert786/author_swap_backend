@@ -615,6 +615,14 @@ class SwapRequestListView(APIView):
         if 'slot_id' in data and 'slot' not in data:
             data['slot'] = data['slot_id']
             
+        # Handle cases where 'book_id' is passed in body instead of 'book'
+        if 'book_id' in data and 'book' not in data:
+            data['book'] = data['book_id']
+            
+        # Handle 'placement' mapping to 'preferred_placement'
+        if 'placement' in data and 'preferred_placement' not in data:
+            data['preferred_placement'] = data['placement'].lower()
+
         # Handle cases where slot ID is passed as a query param
         if 'slot' not in data and request.query_params.get('slot_id'):
             data['slot'] = request.query_params.get('slot_id')
