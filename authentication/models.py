@@ -33,7 +33,7 @@ class AudienceTag(models.Model):
 
 class UserProfile(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='profile')
-    profile_photo = models.ImageField(upload_to='profile_photos/', blank=True, null=True)
+    profile_photo = models.ImageField(upload_to='profile_photos/', blank=True, null=True, max_length=255)
     pen_name = models.CharField(max_length=100, blank=True, null=True)
     author_bio = models.TextField(blank=True, null=True)
 
