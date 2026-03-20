@@ -51,15 +51,15 @@ def get_onboarding_status(user):
             'step1_account_basics': step1,
             'step2_online_presence': step2,
             'step3_connect_mailerlite': step3,
-            'step4_profile_review': True,  # Always true now
-            'all_complete': step1 and step2 and step3,  # Removed step4 requirement
+            'step4_profile_review': bool(profile and profile.onboarding_completed),
+            'all_complete': bool(profile and profile.onboarding_completed),
         }
     except Exception:
         return {
             'step1_account_basics': False,
             'step2_online_presence': False,
             'step3_connect_mailerlite': False,
-            'step4_profile_review': True,
+            'step4_profile_review': False,
             'all_complete': False,
         }
 
@@ -86,6 +86,7 @@ class LoginAPIView(APIView):
                 'refresh': str(refresh),
                 'access': str(access_token),
                 'token': str(access_token),  # For backward compatibility
+                'is_new_user': False,
                 'isprofilecompleted': onboarding['all_complete'],
                 'onboarding_steps': onboarding,
                 'user': {
@@ -110,6 +111,7 @@ class SignupAPIView(APIView):
                 'refresh': str(refresh),
                 'access': str(access_token),
                 'token': str(access_token),  # For backward compatibility
+                'is_new_user': True,
                 'isprofilecompleted': onboarding['all_complete'],
                 'onboarding_steps': onboarding,
                 'user': {
