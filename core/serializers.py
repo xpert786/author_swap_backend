@@ -871,10 +871,21 @@ class SwapHistoryDetailSerializer(serializers.ModelSerializer):
         }
 
     def get_promoting_book(self, obj):
-        # 🔗 Smart Fallback: check requested_book if primary book is null (recovers legacy/seed records)
-        book = obj.book or getattr(obj, 'requested_book', None)
+        # 🎯 Intelligent Context Switching for Book History:
+        # If I am the SLEEPING / RECEIVING party (Slot Owner), I want to see MY book 
+        # that was 'requested_book' in the requester's slot.
+        # If I am the requester, I want to see MY book that I sent to the partner.
+        request = self.context.get('request')
+        if request and request.user.id == obj.slot.user_id:
+            # Current user is the slot owner -> show what THEY had promoted
+            book = obj.requested_book or obj.book
+        else:
+            # Current user is the requester -> show what THEY sent
+            book = obj.book or obj.requested_book
+            
         if not book:
             return None
+            
         result = {
             "id": book.id,
             "title": book.title,
@@ -882,7 +893,6 @@ class SwapHistoryDetailSerializer(serializers.ModelSerializer):
             "status": "Upcoming" if obj.status in ['pending', 'confirmed', 'sending', 'scheduled', 'completed'] else "Completed",
         }
         if book.book_cover:
-            request = self.context.get('request')
             if request:
                 result["cover"] = request.build_absolute_uri(book.book_cover.url)
             else:
@@ -890,37 +900,35 @@ class SwapHistoryDetailSerializer(serializers.ModelSerializer):
         return result
 
     def get_link_ctr_analysis(self, obj):
+        # 📊 Real-Time Performance Engine: 
+        # Attempt to pull tracking data for the specific swap link if available.
         link_clicks = obj.link_clicks.all()
-        # 📈 Mock Analysis Engine: Returns realistic sample data if no actual clicks exist
-        # This helps in development/testing for completed, verified, or scheduled swaps.
-        if not link_clicks and obj.status in ['completed', 'verified', 'scheduled', 'confirmed']:
-            # Fallback to the primary book title or requested book title for the mock data
-            book_title = "The Midnight Garden"
-            if obj.book:
-                book_title = obj.book.title
-            elif hasattr(obj, 'requested_book') and obj.requested_book:
-                book_title = obj.requested_book.title
+        if link_clicks.exists():
+            return SwapLinkClickSerializer(link_clicks, many=True).data
 
-            return [
-                {
-                    "id": 9991,
-                    "link_name": f"Main Book Link ({book_title})",
-                    "destination_url": "https://amazon.com/sample-book",
-                    "clicks": 142,
-                    "ctr": 3.4,
-                    "ctr_label": "Excellent",
-                    "conversions": 12
-                },
-                {
-                    "id": 9992,
-                    "link_name": "Newsletter Footer / Authors Recommendations",
-                    "destination_url": "https://authorswap.com/explorer",
-                    "clicks": 54,
-                    "ctr": 1.1,
-                    "ctr_label": "Average",
-                    "conversions": 1
-                }
-            ]
+        # 🔄 LIVE SYNC FALLBACK: 
+        # If no specific tracking data yet, fallback to the slot owner's (host) 
+        # actual MailerLite campaign history synced via our analytics system.
+        from core.models import CampaignAnalytic
+        try:
+            # We fetch up to 3 most recent campaigns synced from the host account
+            recent_campaigns = CampaignAnalytic.objects.filter(
+                user=obj.slot.user
+            ).order_by('-date')[:3]
+            
+            if recent_campaigns.exists():
+                return [{
+                    "id": c.id,
+                    "link_name": f"Performance for: {c.name}",
+                    "destination_url": "Real-Time MailerLite Sync",
+                    "clicks": int(c.subscribers * (c.click_rate / 100)) if c.click_rate else 0,
+                    "ctr": c.click_rate,
+                    "ctr_label": "Excellent" if c.click_rate > 2 else "Average",
+                    "conversions": 0
+                } for c in recent_campaigns]
+        except Exception:
+            pass
+
         return SwapLinkClickSerializer(link_clicks, many=True).data
 
 
