@@ -3427,17 +3427,12 @@ def _sync_user_subscription_from_stripe(user):
         user_sub = getattr(user, 'subscription', None)
         stripe_customer_id = user_sub.stripe_customer_id if user_sub else None
 
-        # 1. Validate stored ID or search by email
+        # 1. Validate stored ID
         if stripe_customer_id:
             try:
                 stripe.Customer.retrieve(stripe_customer_id)
             except stripe.error.InvalidRequestError:
                 stripe_customer_id = None
-
-        if not stripe_customer_id:
-            customers = stripe.Customer.list(email=user.email, limit=1)
-            if customers.data:
-                stripe_customer_id = customers.data[0].id
 
         if not stripe_customer_id:
             return None
@@ -5230,15 +5225,9 @@ class SyncSubscriptionView(APIView):
                 except stripe.error.InvalidRequestError:
                     stripe_customer_id = None
 
-            # ── Path 3: Search Stripe for a customer by email ──
-            if not stripe_customer_id:
-                customers = stripe.Customer.list(email=user.email, limit=5)
-                for c in customers.data:
-                    # Pick the customer that has active subscriptions
-                    subs = stripe.Subscription.list(customer=c.id, status='active', limit=1)
-                    if subs.data:
-                        stripe_customer_id = c.id
-                        break
+            # ── Path 3: Search Stripe for a customer by email — REMOVED ──
+            # We no longer auto-adopt customers by email to prevent ghost subscriptions for new users.
+            pass
 
             if not stripe_customer_id:
                 return Response(
