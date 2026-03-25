@@ -171,6 +171,7 @@ class ICSExportView(APIView):
                 # Create unique ID for event
                 event_id = f"{slot.id}@authorswap.com"
                 
+                genre_display = slot.get_preferred_genre_display().replace('’', "'")
                 # Add event to ICS
                 ics_lines.extend([
                     'BEGIN:VEVENT',
@@ -178,8 +179,8 @@ class ICSExportView(APIView):
                     f'DTSTAMP:{now}',
                     f'DTSTART:{start_time}',
                     f'DTEND:{end_time}',
-                    f'SUMMARY:Newsletter: {slot.get_preferred_genre_display()}',
-                    f'DESCRIPTION:Newsletter slot for {slot.get_preferred_genre_display()}',
+                    f'SUMMARY:Newsletter: {genre_display}',
+                    f'DESCRIPTION:Newsletter slot for {genre_display}',
                     'STATUS:CONFIRMED',
                     'END:VEVENT'
                 ])

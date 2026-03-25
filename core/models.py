@@ -63,7 +63,7 @@ class Book(models.Model):
     price_tier = models.CharField(max_length=50, blank=True, null=True, choices=[('discount', 'Discount'), ('free', 'Free'), ('standard', 'Standard'), ('0.99', '$0.99')], default='standard')
     book_cover = models.ImageField(upload_to='book_covers/', blank=True, null=True, max_length=255)
     availability = models.CharField(max_length=50,choices=[('all','All'),('wide','Wide'),('kindle_unlimited','Kindle Unlimited')],default='all')
-    publish_date = models.DateField()
+    publish_date = models.DateField(blank=True, null=True)
     description = models.TextField()    
     # Retailer Links
     amazon_url = models.URLField(blank=True, null=True)
@@ -82,6 +82,7 @@ class Profile(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='profiles')
     email = models.EmailField(blank=True, null=True)
     name = models.CharField(max_length=100)
+    pen_name = models.CharField(max_length=100, blank=True, null=True)
     profile_picture = models.ImageField(upload_to='profile_pictures/', blank=True, null=True, max_length=255)
     location = models.CharField(max_length=100, blank=True, null=True)
     primary_genre = models.CharField(max_length=50, choices=PRIMARY_GENRE_CHOICES, blank=True, default='')

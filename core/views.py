@@ -531,8 +531,8 @@ class NewsletterSlotExportView(APIView):
                 f"DTSTAMP:{datetime.now().strftime('%Y%m%dT%H%M%SZ')}",
                 f"DTSTART:{start_dt.strftime('%Y%m%dT%H%M%SZ')}",
                 f"DTEND:{end_dt.strftime('%Y%m%dT%H%M%SZ')}",
-                f"SUMMARY:{title}",
-                f"DESCRIPTION:{description.replace('\\n', '\\\\n')}",
+                f"SUMMARY:{title.replace('’', "'")}",
+                f"DESCRIPTION:{description.replace('’', "'").replace('\\n', '\\\\n')}",
                 "END:VEVENT",
                 "END:VCALENDAR"
             ]

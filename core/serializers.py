@@ -31,9 +31,6 @@ class ProfileSerializer(serializers.ModelSerializer):
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
-        
-        # Set a fallback pen_name to the model's name field
-        data['pen_name'] = data.get('name', '')
 
         # Pull data from authentication.UserProfile to fill empty fields
         try:
@@ -54,8 +51,6 @@ class ProfileSerializer(serializers.ModelSerializer):
                     src_val = getattr(user_profile, src_field, None)
                     if src_val and not data.get(dst_key):
                         data[dst_key] = src_val
-                        
-                data['pen_name'] = user_profile.pen_name
 
                 # Profile photo
                 if not data.get('profile_picture') and user_profile.profile_photo:
@@ -260,6 +255,20 @@ class BookSerializer(serializers.ModelSerializer):
                     data.pop('subgenres', None)
                 else:
                     del data['subgenres']
+
+        # Clear empty strings for book_cover to prevent "The submitted data was not a file" error
+        if 'book_cover' in data and data.get('book_cover') == '':
+            if hasattr(data, 'pop'):
+                data.pop('book_cover', None)
+            else:
+                del data['book_cover']
+
+        # Clear empty strings for publish_date to prevent "Date has wrong format" error
+        if 'publish_date' in data and data.get('publish_date') == '':
+            if hasattr(data, 'pop'):
+                data.pop('publish_date', None)
+            else:
+                del data['publish_date']
 
         validated_data = super().to_internal_value(data)
         
