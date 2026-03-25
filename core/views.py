@@ -536,7 +536,7 @@ class NewsletterSlotExportView(APIView):
                 "END:VEVENT",
                 "END:VCALENDAR"
             ]
-            response = HttpResponse("\n".join(ics_content), content_type='text/calendar')
+            response = HttpResponse("\n".join(ics_content), content_type='text/calendar; charset=utf-8')
             response['Content-Disposition'] = f'attachment; filename="newsletter_slot_{slot.id}.ics"'
             return response
 

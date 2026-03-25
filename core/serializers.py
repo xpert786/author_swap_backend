@@ -31,6 +31,9 @@ class ProfileSerializer(serializers.ModelSerializer):
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
+        
+        # Set a fallback pen_name to the model's name field
+        data['pen_name'] = data.get('name', '')
 
         # Pull data from authentication.UserProfile to fill empty fields
         try:
@@ -51,6 +54,8 @@ class ProfileSerializer(serializers.ModelSerializer):
                     src_val = getattr(user_profile, src_field, None)
                     if src_val and not data.get(dst_key):
                         data[dst_key] = src_val
+                        
+                data['pen_name'] = user_profile.pen_name
 
                 # Profile photo
                 if not data.get('profile_picture') and user_profile.profile_photo:
@@ -240,7 +245,7 @@ class BookSerializer(serializers.ModelSerializer):
                     raw_subs = [s.strip() for s in val if isinstance(s, str) and s.strip()]
                 elif isinstance(val, dict):
                     raw_subs = []
-                    for k in sorted(val.keys(), key=lambda x: int(x) if str(x).isdigit() else x):
+                    for k in sorted(val.keys(), key=lambda x: (int(x) if str(x).isdigit() else float('inf'), str(x))):
                         item = val[k]
                         if isinstance(item, str) and item.strip():
                             raw_subs.append(item.strip())

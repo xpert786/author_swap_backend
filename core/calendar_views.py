@@ -145,7 +145,7 @@ class ICSExportView(APIView):
         ics_content = self.generate_ics_content(slots)
         
         # Create HTTP response with ICS file
-        response = HttpResponse(ics_content, content_type='text/calendar')
+        response = HttpResponse(ics_content, content_type='text/calendar; charset=utf-8')
         response['Content-Disposition'] = f'attachment; filename="newsletter_schedule_{user.username}.ics"'
         
         return response
