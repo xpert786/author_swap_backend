@@ -844,6 +844,10 @@ class SwapHistoryDetailSerializer(serializers.ModelSerializer):
         # For non-paid swaps or if payment not completed, show actual completion date
         if obj.completed_at:
             return obj.completed_at.strftime("%d %b, %Y")
+        elif obj.status in ['completed', 'verified'] and obj.created_at:
+            # Fallback for older data that wasn't updated with completed_at
+            return obj.created_at.strftime("%d %b, %Y")
+            
         return None
 
     def get_status_label(self, obj):
@@ -858,8 +862,12 @@ class SwapHistoryDetailSerializer(serializers.ModelSerializer):
                     return 'Swap Completed'
                 return 'Swap Scheduled'
         
-        # For non-paid swaps, check scheduled_date
-        if obj.status in ['confirmed', 'completed', 'scheduled']:
+        # For non-paid swaps, if status is already completed/verified, show it
+        if obj.status in ['completed', 'verified']:
+            return 'Swap Completed'
+            
+        # Check scheduled_date
+        if obj.status in ['confirmed', 'scheduled']:
             from django.utils import timezone
             if obj.scheduled_date and obj.scheduled_date <= timezone.now().date():
                 return 'Swap Completed'

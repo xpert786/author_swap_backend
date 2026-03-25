@@ -1148,6 +1148,7 @@ class AcceptSwapView(APIView):
         # Update status: if free, mark as completed; otherwise scheduled
         if is_free_slot:
             swap.status = 'completed'
+            swap.completed_at = timezone.now()
         else:
             swap.status = 'scheduled'
         swap.save()
