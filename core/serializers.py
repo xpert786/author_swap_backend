@@ -339,6 +339,23 @@ class SwapRequestSerializer(serializers.ModelSerializer):
         model = SwapRequest
         fields = '__all__'
         read_only_fields = ['requester', 'created_at']
+        extra_kwargs = {
+            'message': {'required': False},
+        }
+        
+    def to_internal_value(self, data):
+        # Create a mutable copy if it's a QueryDict
+        if hasattr(data, 'copy'):
+            data = data.copy()
+            
+        # Clear empty strings for message to prevent validation issues
+        if 'message' in data and data.get('message') == '':
+            if hasattr(data, 'pop'):
+                data.pop('message', None)
+            else:
+                del data['message']
+                
+        return super().to_internal_value(data)
 
 
 
