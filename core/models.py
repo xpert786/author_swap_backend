@@ -64,7 +64,7 @@ class Book(models.Model):
     book_cover = models.ImageField(upload_to='book_covers/', blank=True, null=True, max_length=255)
     availability = models.CharField(max_length=50,choices=[('all','All'),('wide','Wide'),('kindle_unlimited','Kindle Unlimited')],default='all')
     publish_date = models.DateField(blank=True, null=True)
-    description = models.TextField()    
+    description = models.TextField(blank=True, default='')    
     # Retailer Links
     amazon_url = models.URLField(blank=True, null=True)
     apple_url = models.URLField(blank=True, null=True)

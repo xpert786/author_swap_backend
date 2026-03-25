@@ -190,6 +190,9 @@ class BookSerializer(serializers.ModelSerializer):
             'kobo_url': {'required': True},
             'barnes_noble_url': {'required': True},
             'availability': {'required': True},
+            'book_cover': {'required': False},
+            'publish_date': {'required': False},
+            'description': {'required': False},
         }
 
     def get_swap_count(self, obj):
@@ -256,12 +259,14 @@ class BookSerializer(serializers.ModelSerializer):
                 else:
                     del data['subgenres']
 
-        # Clear empty strings for book_cover to prevent "The submitted data was not a file" error
-        if 'book_cover' in data and data.get('book_cover') == '':
-            if hasattr(data, 'pop'):
-                data.pop('book_cover', None)
-            else:
-                del data['book_cover']
+        # Clear book_cover if it's not an actual file upload (string values cause validation error)
+        if 'book_cover' in data:
+            val = data.get('book_cover')
+            if val is None or isinstance(val, str):
+                if hasattr(data, 'pop'):
+                    data.pop('book_cover', None)
+                else:
+                    del data['book_cover']
 
         # Clear empty strings for publish_date to prevent "Date has wrong format" error
         if 'publish_date' in data and data.get('publish_date') == '':

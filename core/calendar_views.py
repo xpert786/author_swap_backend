@@ -164,21 +164,31 @@ class ICSExportView(APIView):
         
         for slot in slots:
             if slot.send_date:
-                # Convert to UTC for ICS format
-                start_time = slot.send_date.strftime('%Y%m%dT%H%M%SZ')
-                end_time = (slot.send_date + timedelta(hours=1)).strftime('%Y%m%dT%H%M%SZ')
-                
                 # Create unique ID for event
                 event_id = f"{slot.id}@authorswap.com"
                 
-                genre_display = slot.get_preferred_genre_display().replace('’', "'")
+                # Sanitize curly quotes to ASCII for maximum compatibility
+                genre_display = slot.get_preferred_genre_display().replace('\u2019', "'")
+
+                # Combine send_date + send_time into a proper datetime for correct duration
+                if slot.send_time:
+                    start_dt = datetime.combine(slot.send_date, slot.send_time)
+                    end_dt = start_dt + timedelta(hours=1)
+                    start_str = f'DTSTART:{start_dt.strftime("%Y%m%dT%H%M%SZ")}'
+                    end_str = f'DTEND:{end_dt.strftime("%Y%m%dT%H%M%SZ")}'
+                else:
+                    # All-day event format (no time component)
+                    next_day = slot.send_date + timedelta(days=1)
+                    start_str = f'DTSTART;VALUE=DATE:{slot.send_date.strftime("%Y%m%d")}'
+                    end_str = f'DTEND;VALUE=DATE:{next_day.strftime("%Y%m%d")}'
+
                 # Add event to ICS
                 ics_lines.extend([
                     'BEGIN:VEVENT',
                     f'UID:{event_id}',
                     f'DTSTAMP:{now}',
-                    f'DTSTART:{start_time}',
-                    f'DTEND:{end_time}',
+                    start_str,
+                    end_str,
                     f'SUMMARY:Newsletter: {genre_display}',
                     f'DESCRIPTION:Newsletter slot for {genre_display}',
                     'STATUS:CONFIRMED',
