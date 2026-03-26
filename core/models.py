@@ -85,7 +85,7 @@ class Profile(models.Model):
     pen_name = models.CharField(max_length=100, blank=True, null=True)
     profile_picture = models.ImageField(upload_to='profile_pictures/', blank=True, null=True, max_length=255)
     location = models.CharField(max_length=100, blank=True, null=True)
-    primary_genre = models.CharField(max_length=50, choices=PRIMARY_GENRE_CHOICES, blank=True, default='')
+    primary_genre = models.CharField(max_length=255, blank=True, default='')
     bio = models.TextField(blank=True, default='')
     instagram_url = models.URLField(blank=True, null=True)
     tiktok_url = models.URLField(blank=True, null=True)

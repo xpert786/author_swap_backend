@@ -245,6 +245,25 @@ class ProfileDetailView(RetrieveUpdateDestroyAPIView):
     
     def get_queryset(self):
         return Profile.objects.filter(user=self.request.user)
+        
+    def get_serializer(self, *args, **kwargs):
+        if 'data' in kwargs:
+            data = kwargs['data']
+            # Make data mutable
+            mutable_data = data.copy() if hasattr(data, 'copy') else data
+            
+            # Extract genres list from QueryDict or standard dict
+            if hasattr(data, 'getlist'):
+                genres = data.getlist('primary_genre')
+            else:
+                genres = data.get('primary_genre')
+                
+            if isinstance(genres, list) and len(genres) > 0:
+                mutable_data['primary_genre'] = ','.join([str(g) for g in genres if g])
+                
+            kwargs['data'] = mutable_data
+            
+        return super().get_serializer(*args, **kwargs)
 
     def post(self, request, *args, **kwargs):
         if Profile.objects.filter(user=request.user).exists():
@@ -261,7 +280,7 @@ class ProfileDetailView(RetrieveUpdateDestroyAPIView):
 
     def get_object(self):
         queryset = self.get_queryset()
-        obj = queryset.first()
+        obj = queryset
         if obj is None:
             from rest_framework.exceptions import NotFound
             raise NotFound({

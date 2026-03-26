@@ -134,6 +134,7 @@ class ICSExportView(APIView):
 
     def get(self, request):
         user = request.user
+        format_type = request.query_params.get('format', 'ics')
         
         # Get user's newsletter slots
         slots = NewsletterSlot.objects.filter(user=user).order_by('send_date')
@@ -141,6 +142,39 @@ class ICSExportView(APIView):
         if not slots.exists():
             return JsonResponse({'error': 'No newsletter slots found'}, status=404)
         
+        if format_type == 'json':
+            events = []
+            for slot in slots:
+                genre_display = slot.get_preferred_genre_display().replace('\u2019', "'")
+                event = {
+                    'id': slot.id,
+                    'uid': f"{slot.id}@authorswap.com",
+                    'summary': f'Newsletter: {genre_display}',
+                    'description': f'Newsletter slot for {genre_display}',
+                    'status': 'CONFIRMED',
+                    'send_date': slot.send_date.strftime('%Y-%m-%d'),
+                    'send_time': slot.send_time.strftime('%H:%M:%S') if slot.send_time else None,
+                }
+                
+                if slot.send_time:
+                    start_dt = datetime.combine(slot.send_date, slot.send_time)
+                    end_dt = start_dt + timedelta(hours=1)
+                    event['start'] = start_dt.isoformat()
+                    event['end'] = end_dt.isoformat()
+                else:
+                    event['start'] = slot.send_date.isoformat()
+                    event['end'] = (slot.send_date + timedelta(days=1)).isoformat()
+                    event['all_day'] = True
+                
+                events.append(event)
+                
+            return JsonResponse({
+                'success': True,
+                'user': user.username,
+                'events_count': len(events),
+                'events': events
+            })
+
         # Generate ICS content
         ics_content = self.generate_ics_content(slots)
         
