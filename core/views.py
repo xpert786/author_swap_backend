@@ -717,14 +717,14 @@ class SwapRequestListView(APIView):
                 return Response({"detail": "You have already sent a request for this slot."}, status=status.HTTP_400_BAD_REQUEST)
 
             # Link validation (Resilient for mock/test links)
-            if book:
-                links = [book.amazon_url, book.apple_url, book.kobo_url, book.barnes_noble_url]
+            if book and book.site_url:
+                links = [u.strip() for u in book.site_url.split(',') if u.strip()]
                 for link in links:
                     if link and 'test' not in link and 'localhost' not in link: # Skip check for test/local links
                         try:
-                            r = requests.head(link, timeout=3, allow_redirects=True)
                             # We still check for hard 404s on real links, but won't block the whole request
                             # if it's just a connection glitch or mock link
+                            r = requests.head(link, timeout=3, allow_redirects=True)
                         except requests.RequestException:
                             pass # For now, we skip blocking on connectivity issues to avoid UX friction
 

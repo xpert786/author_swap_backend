@@ -211,10 +211,7 @@ class BookSerializer(serializers.ModelSerializer):
         read_only_fields = ['user']
         extra_kwargs = {
             'price_tier': {'required': True},
-            'amazon_url': {'required': True},
-            'apple_url': {'required': True},
-            'kobo_url': {'required': True},
-            'barnes_noble_url': {'required': True},
+            'site_url': {'required': False, 'allow_blank': True},
             'availability': {'required': True},
             'book_cover': {'required': False},
             'publish_date': {'required': False},
@@ -285,6 +282,25 @@ class BookSerializer(serializers.ModelSerializer):
                 else:
                     del data['subgenres']
 
+        # Handle multiple URLs in site_url
+        if 'site_url' in data:
+            raw_urls = []
+            if hasattr(data, 'getlist'):
+                raw_urls_list = data.getlist('site_url')
+                if len(raw_urls_list) == 1 and isinstance(raw_urls_list[0], str) and ',' in raw_urls_list[0]:
+                    raw_urls = [u.strip() for u in raw_urls_list[0].split(',') if u.strip()]
+                else:
+                    raw_urls = [u.strip() for u in raw_urls_list if isinstance(u, str) and u.strip()]
+            else:
+                val = data.get('site_url')
+                if isinstance(val, str):
+                    raw_urls = [u.strip() for u in val.split(',') if u.strip()]
+                elif isinstance(val, list):
+                    raw_urls = [u.strip() for u in val if isinstance(u, str) and u.strip()]
+            
+            if raw_urls:
+                data['site_url'] = ",".join(raw_urls)
+
         # Clear book_cover if it's not an actual file upload (string values cause validation error)
         if 'book_cover' in data:
             val = data.get('book_cover')
@@ -303,7 +319,7 @@ class BookSerializer(serializers.ModelSerializer):
 
         validated_data = super().to_internal_value(data)
         
-        # Flatten the list back to a string for the DB CharField
+        # Flatten the subgenres list back to a string for the DB CharField
         if 'subgenres' in validated_data and isinstance(validated_data['subgenres'], list):
             validated_data['subgenres'] = ",".join(validated_data['subgenres'])
             
@@ -311,15 +327,24 @@ class BookSerializer(serializers.ModelSerializer):
 
     def to_representation(self, instance):
         repr = super().to_representation(instance)
+        # Handle subgenres
         if instance.subgenres:
-            # If it's already a list (from validated_data), use it
             if isinstance(instance.subgenres, list):
                 repr['subgenres'] = instance.subgenres
-            # If it's a string (from DB), split it
             elif isinstance(instance.subgenres, str):
                 repr['subgenres'] = instance.subgenres.split(',')
         else:
             repr['subgenres'] = []
+            
+        # Handle site_url
+        if instance.site_url:
+            if isinstance(instance.site_url, str):
+                repr['site_url'] = [u.strip() for u in instance.site_url.split(',') if u.strip()]
+            else:
+                repr['site_url'] = instance.site_url
+        else:
+            repr['site_url'] = []
+            
         return repr
 
 class NotificationSerializer(serializers.ModelSerializer):
@@ -1173,8 +1198,13 @@ class TrackMySwapSerializer(serializers.ModelSerializer):
         
         # If no link clicks exist, add placeholder with tracking
         if not links and obj.book:
-            # Add tracking parameter to book URL
-            book_url = getattr(obj.book, 'amazon_url', '#') or "#"
+            # Add tracking parameter to the first available site URL
+            book_url = "#"
+            if obj.book.site_url:
+                urls = [u.strip() for u in obj.book.site_url.split(',') if u.strip()]
+                if urls:
+                    book_url = urls[0]
+
             if '?' in book_url:
                 tracked_url = f"{book_url}&swap_track={obj.id}"
             else:
