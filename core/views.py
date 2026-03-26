@@ -813,7 +813,11 @@ class SwapRequestListView(APIView):
                 return Response({"detail": "Slot not found."}, status=status.HTTP_404_NOT_FOUND)
                 
         # Requested to return data from NewsletterSlot table instead of SwapRequest
-        slots = NewsletterSlot.objects.all().order_by('-created_at')
+        # Filter for public slots from other users
+        slots = NewsletterSlot.objects.filter(
+            visibility='public',
+            status='available'
+        ).exclude(user=request.user).order_by('-created_at')
         serializer = SlotExploreSerializer(slots, many=True)
         return Response(serializer.data)
 
