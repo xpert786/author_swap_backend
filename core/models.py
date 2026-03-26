@@ -37,6 +37,7 @@ class NewsletterSlot(models.Model):
         default='public'
     )
     
+    
     # Secret token for private/hidden slot sharing
     share_token = models.UUIDField(default=uuid.uuid4, null=True, blank=True, unique=True)
     
