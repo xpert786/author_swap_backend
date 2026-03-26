@@ -38,8 +38,8 @@ class NewsletterSlot(models.Model):
     )
     
     
-    # Secret token for private/hidden slot sharing
-    share_token = models.UUIDField(default=uuid.uuid4, null=True, blank=True, unique=True)
+    # Secret token for private/hidden slot sharing (no default here to avoid migration issues)
+    share_token = models.UUIDField(null=True, blank=True, unique=True)
     
     # Advanced Discovery Fields
     PLACEMENT_CHOICES = [('top', 'Top'), ('mid', 'Mid'), ('bottom', 'Bottom'), ('any', 'Any')]
@@ -55,6 +55,10 @@ class NewsletterSlot(models.Model):
     
     created_at = models.DateTimeField(auto_now_add=True)
 
+    def save(self, *args, **kwargs):
+        if not self.share_token:
+            self.share_token = uuid.uuid4()
+        super().save(*args, **kwargs)
 
     def __str__(self):   
         return f"{self.preferred_genre} slot on {self.send_date}"
