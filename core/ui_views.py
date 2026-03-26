@@ -44,10 +44,29 @@ class SlotExploreView(ListAPIView):
     search_fields = ['user__profiles__name', 'preferred_genre']
 
     def get_queryset(self):
-        # Exclude the logged-in user's own slots and only show public slots
+        user = self.request.user
+        
+        # Get list of users the current user has completed swaps with (Friends)
+        # Search in both sent and received requests
+        past_partners = SwapRequest.objects.filter(
+            Q(requester=user) | Q(slot__user=user),
+            status__in=['completed', 'verified']
+        ).values_list('requester', 'slot__user')
+        
+        # Flatten and unique the user ID list
+        partner_ids = set()
+        for p1, p2 in past_partners:
+            partner_ids.add(p1)
+            partner_ids.add(p2)
+        
+        if user.id in partner_ids:
+            partner_ids.remove(user.id)
+
+        # Show public slots OR friend_only slots from past partners
         return NewsletterSlot.objects.filter(
-            visibility='public'
-        ).exclude(user=self.request.user).order_by('-created_at')
+            Q(visibility='public') | 
+            Q(visibility='friend_only', user_id__in=list(partner_ids))
+        ).exclude(user=user).order_by('-created_at')
     
     def list(self, request, *args, **kwargs):
         # Get the paginated response first

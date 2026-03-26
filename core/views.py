@@ -623,10 +623,28 @@ class SwapPartnerDiscoveryView(ListCreateAPIView):
     filterset_class = NewsletterSlotFilter
 
     def get_queryset(self):
+        user = self.request.user
+        
+        # Identify "Friends" as authors with whom a swap has been completed/verified
+        past_partners = SwapRequest.objects.filter(
+            Q(requester=user) | Q(slot__user=user),
+            status__in=['completed', 'verified']
+        ).values_list('requester', 'slot__user')
+        
+        partner_ids = set()
+        for p1, p2 in past_partners:
+            partner_ids.add(p1)
+            partner_ids.add(p2)
+        
+        if user.id in partner_ids:
+            partner_ids.remove(user.id)
+
+        # Filter for Public OR Friend Only (if user is a past partner)
         return NewsletterSlot.objects.filter(
-            visibility='public', 
+            Q(visibility='public') | 
+            Q(visibility='friend_only', user_id__in=list(partner_ids)),
             status='available'
-        ).exclude(user=self.request.user).order_by('-created_at')
+        ).exclude(user=user).order_by('-created_at')
 
 
 class SwapRequestListView(APIView):

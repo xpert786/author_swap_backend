@@ -140,6 +140,7 @@ class NewsletterSlotSerializer(serializers.ModelSerializer):
     def get_share_url(self, obj):
         """Returns the invitation link if visibility is not public"""
         if obj.visibility in ['hidden', 'single_use_private_link', 'friend_only']:
+            # Using the production frontend URL as requested
             return f"http://72.61.251.114/authorswap-frontend/slot-detail/{obj.id}/"
         return None
 
