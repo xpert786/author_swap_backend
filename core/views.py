@@ -280,15 +280,14 @@ class ProfileDetailView(RetrieveUpdateDestroyAPIView):
 
     def get_object(self):
         queryset = self.get_queryset()
-        obj = queryset
-        if obj is None:
+        if queryset is None:
             from rest_framework.exceptions import NotFound
             raise NotFound({
                 "detail": "Profile not found. Please create your profile first.",
                 "has_profile": False
             })
-        self.check_object_permissions(self.request, obj)
-        return obj
+        self.check_object_permissions(self.request, queryset)
+        return queryset
     
     def perform_update(self, serializer):
         serializer.save(user=self.request.user)
