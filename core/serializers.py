@@ -77,6 +77,7 @@ class NewsletterSlotSerializer(serializers.ModelSerializer):
     time_period = serializers.ReadOnlyField()
     formatted_time = serializers.SerializerMethodField(required=False)
     formatted_date = serializers.SerializerMethodField()
+    formatted_send_date_time = serializers.SerializerMethodField()
     current_partners_count = serializers.SerializerMethodField()
     audience_size = serializers.SerializerMethodField()
     
@@ -95,10 +96,28 @@ class NewsletterSlotSerializer(serializers.ModelSerializer):
             # %I is 12-hour clock, %M is minutes, %p is AM/PM
             return obj.send_time.strftime("%I:%M %p")
         return None
+        
     def get_formatted_date(self, obj):
         if obj.send_date:
             return obj.send_date.strftime("%d-%m-%Y")
         return None
+
+    def get_formatted_send_date_time(self, obj):
+        """Returns formatted date and time like 'Wednesday, May 15 at 10:00 AM EST'"""
+        if not obj.send_date:
+            return None
+        
+        # Format the date: Wednesday, May 15
+        date_str = obj.send_date.strftime('%A, %B %d')
+        
+        if obj.send_time:
+            # Format the time: 10:00 AM
+            # lstrip('0') removes leading zero for hours (e.g. 09:00 -> 9:00)
+            time_str = obj.send_time.strftime('%I:%M %p').lstrip('0')
+            return f"{date_str} at {time_str} EST"
+        
+        # Fallback if no time is specified
+        return f"{date_str} (Flexible)"
         
     def get_audience_size(self, obj):
         # Prefer the 'active_subscribers' from user's verification profile

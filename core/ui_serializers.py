@@ -23,10 +23,12 @@ class SlotExploreSerializer(serializers.ModelSerializer):
     current_partners_count = serializers.SerializerMethodField()
     audience_size = serializers.SerializerMethodField()  # Override to use active subscribers
 
+    formatted_send_date_time = serializers.SerializerMethodField()
+    
     class Meta:
         model = NewsletterSlot
         fields = [
-            'id', 'send_date', 'send_time', 'audience_size', 'visibility', 
+            'id', 'send_date', 'send_time', 'formatted_send_date_time', 'audience_size', 'visibility', 
             'status', 'promotion_type', 'price', 'preferred_genre', 
             'current_partners_count', 'max_partners', 'author'
         ]
@@ -42,6 +44,22 @@ class SlotExploreSerializer(serializers.ModelSerializer):
 
     def get_current_partners_count(self, obj):
         return obj.swap_requests.filter(status__in=['confirmed', 'verified', 'scheduled', 'completed']).count()
+
+    def get_formatted_send_date_time(self, obj):
+        """Returns formatted date and time like 'Wednesday, May 15 at 10:00 AM EST'"""
+        if not obj.send_date:
+            return None
+        
+        # Format the date: Wednesday, May 15
+        date_str = obj.send_date.strftime('%A, %B %d')
+        
+        if obj.send_time:
+            # Format the time: 10:00 AM
+            time_str = obj.send_time.strftime('%I:%M %p').lstrip('0')
+            return f"{date_str} at {time_str} EST"
+        
+        # Fallback if no time is specified
+        return f"{date_str} (Flexible)"
 
 class SlotPartnerSerializer(serializers.ModelSerializer):
     """Used to serialize SwapRequest instances as partners inside a Slot"""
@@ -155,10 +173,12 @@ class SlotDetailsSerializer(serializers.ModelSerializer):
     swap_partners = serializers.SerializerMethodField()
     audience_size = serializers.SerializerMethodField()  # Override to use active subscribers
     
+    formatted_send_date_time = serializers.SerializerMethodField()
+    
     class Meta:
         model = NewsletterSlot
         fields = [
-            'id', 'author', 'send_date', 'send_time', 'audience_size', 'visibility', 
+            'id', 'author', 'send_date', 'send_time', 'formatted_send_date_time', 'audience_size', 'visibility', 
             'status', 'preferred_genre', 'current_partners_count', 'max_partners', 'swap_partners'
         ]
 
@@ -177,6 +197,22 @@ class SlotDetailsSerializer(serializers.ModelSerializer):
     def get_swap_partners(self, obj):
         requests = obj.swap_requests.filter(status__in=['confirmed', 'verified', 'completed', 'sending', 'scheduled'])
         return SlotPartnerSerializer(requests, many=True, context=self.context).data
+
+    def get_formatted_send_date_time(self, obj):
+        """Returns formatted date and time like 'Wednesday, May 15 at 10:00 AM EST'"""
+        if not obj.send_date:
+            return None
+        
+        # Format the date: Wednesday, May 15
+        date_str = obj.send_date.strftime('%A, %B %d')
+        
+        if obj.send_time:
+            # Format the time: 10:00 AM
+            time_str = obj.send_time.strftime('%I:%M %p').lstrip('0')
+            return f"{date_str} at {time_str} EST"
+        
+        # Fallback if no time is specified
+        return f"{date_str} (Flexible)"
 
 class SwapArrangementSerializer(serializers.ModelSerializer):
     """Serializer for Figma Screen 2 - Swap Arrangement Modal"""
