@@ -245,6 +245,17 @@ class ProfileDetailView(RetrieveUpdateDestroyAPIView):
     
     def get_queryset(self):
         return Profile.objects.filter(user=self.request.user)
+
+    def get(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        if not queryset.exists():
+            from rest_framework.exceptions import NotFound
+            raise NotFound({
+                "detail": "Profile not found. Please create your profile first.",
+                "has_profile": False
+            })
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
         
     def get_serializer(self, *args, **kwargs):
         if 'data' in kwargs:
@@ -280,14 +291,15 @@ class ProfileDetailView(RetrieveUpdateDestroyAPIView):
 
     def get_object(self):
         queryset = self.get_queryset()
-        if queryset is None:
+        obj = queryset.first()
+        if obj is None:
             from rest_framework.exceptions import NotFound
             raise NotFound({
                 "detail": "Profile not found. Please create your profile first.",
                 "has_profile": False
             })
-        self.check_object_permissions(self.request, queryset)
-        return queryset
+        self.check_object_permissions(self.request, obj)
+        return obj
     
     def perform_update(self, serializer):
         serializer.save(user=self.request.user)
