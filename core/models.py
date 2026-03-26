@@ -82,7 +82,7 @@ class Profile(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='profiles')
     email = models.EmailField(blank=True, null=True)
     name = models.CharField(max_length=100)
-    pen_name = models.CharField(max_length=100, blank=True, null=True)
+    pen_name = models.CharField(max_length=255, blank=True, null=True)
     profile_picture = models.ImageField(upload_to='profile_pictures/', blank=True, null=True, max_length=255)
     location = models.CharField(max_length=100, blank=True, null=True)
     primary_genre = models.CharField(max_length=255, blank=True, default='')

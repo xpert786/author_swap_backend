@@ -263,7 +263,16 @@ class ProfileDetailView(RetrieveUpdateDestroyAPIView):
             # Make data mutable
             mutable_data = data.copy() if hasattr(data, 'copy') else data
             
-            # Extract genres list from QueryDict or standard dict
+            # Extract and join pen names
+            if hasattr(data, 'getlist'):
+                pen_names = data.getlist('pen_name')
+            else:
+                pen_names = data.get('pen_name')
+                
+            if isinstance(pen_names, list) and len(pen_names) > 0:
+                mutable_data['pen_name'] = ','.join([str(p) for p in pen_names if p])
+                
+            # Extract and join genres
             if hasattr(data, 'getlist'):
                 genres = data.getlist('primary_genre')
             else:
