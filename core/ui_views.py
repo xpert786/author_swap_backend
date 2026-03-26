@@ -44,8 +44,10 @@ class SlotExploreView(ListAPIView):
     search_fields = ['user__profiles__name', 'preferred_genre']
 
     def get_queryset(self):
-        # Exclude the logged-in user's own slots from the explore feed
-        return NewsletterSlot.objects.exclude(user=self.request.user).order_by('-created_at')
+        # Exclude the logged-in user's own slots and only show public slots
+        return NewsletterSlot.objects.filter(
+            visibility='public'
+        ).exclude(user=self.request.user).order_by('-created_at')
     
     def list(self, request, *args, **kwargs):
         # Get the paginated response first
