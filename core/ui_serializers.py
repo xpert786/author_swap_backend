@@ -24,11 +24,12 @@ class SlotExploreSerializer(serializers.ModelSerializer):
     audience_size = serializers.SerializerMethodField()  # Override to use active subscribers
 
     formatted_send_date_time = serializers.SerializerMethodField()
+    share_url = serializers.SerializerMethodField()
     
     class Meta:
         model = NewsletterSlot
         fields = [
-            'id', 'send_date', 'send_time', 'formatted_send_date_time', 'audience_size', 'visibility', 
+            'id', 'send_date', 'send_time', 'formatted_send_date_time', 'share_url', 'audience_size', 'visibility', 
             'status', 'promotion_type', 'price', 'preferred_genre', 
             'current_partners_count', 'max_partners', 'author'
         ]
@@ -60,6 +61,9 @@ class SlotExploreSerializer(serializers.ModelSerializer):
         
         # Fallback if no time is specified
         return f"{date_str} (Flexible)"
+
+    def get_share_url(self, obj):
+        return f"http://72.61.251.114/authorswap-frontend/slot-detail/{obj.id}/"
 
 class SlotPartnerSerializer(serializers.ModelSerializer):
     """Used to serialize SwapRequest instances as partners inside a Slot"""
@@ -174,11 +178,12 @@ class SlotDetailsSerializer(serializers.ModelSerializer):
     audience_size = serializers.SerializerMethodField()  # Override to use active subscribers
     
     formatted_send_date_time = serializers.SerializerMethodField()
+    share_url = serializers.SerializerMethodField()
     
     class Meta:
         model = NewsletterSlot
         fields = [
-            'id', 'author', 'send_date', 'send_time', 'formatted_send_date_time', 'audience_size', 'visibility', 
+            'id', 'author', 'send_date', 'send_time', 'formatted_send_date_time', 'share_url', 'audience_size', 'visibility', 
             'status', 'preferred_genre', 'current_partners_count', 'max_partners', 'swap_partners'
         ]
 
@@ -197,6 +202,9 @@ class SlotDetailsSerializer(serializers.ModelSerializer):
     def get_swap_partners(self, obj):
         requests = obj.swap_requests.filter(status__in=['confirmed', 'verified', 'completed', 'sending', 'scheduled'])
         return SlotPartnerSerializer(requests, many=True, context=self.context).data
+
+    def get_share_url(self, obj):
+        return f"http://72.61.251.114/authorswap-frontend/slot-detail/{obj.id}/"
 
     def get_formatted_send_date_time(self, obj):
         """Returns formatted date and time like 'Wednesday, May 15 at 10:00 AM EST'"""
