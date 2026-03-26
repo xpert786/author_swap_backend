@@ -2,6 +2,7 @@ from django.db import models
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 from decimal import Decimal
+import uuid
 from authentication.constants import PRIMARY_GENRE_CHOICES
 
 User = get_user_model()
@@ -35,6 +36,9 @@ class NewsletterSlot(models.Model):
         choices=[('public', 'Public'), ('friend_only', 'Friend Only'),('single_use_private_link', 'Single-use private link'),('hidden', 'Hidden')], 
         default='public'
     )
+    
+    # Secret token for private/hidden slot sharing
+    share_token = models.UUIDField(default=uuid.uuid4, null=True, blank=True, unique=True)
     
     # Advanced Discovery Fields
     PLACEMENT_CHOICES = [('top', 'Top'), ('mid', 'Mid'), ('bottom', 'Bottom'), ('any', 'Any')]

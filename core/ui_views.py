@@ -116,3 +116,45 @@ class SwapArrangementView(RetrieveAPIView):
         return SwapRequest.objects.filter(
             Q(requester=self.request.user) | Q(slot__user=self.request.user)
         )
+
+
+class SharedSlotView(RetrieveAPIView):
+    """
+    Endpoint: /api/slots/shared/<token>/
+    Allows access to a private/hidden slot via its unique share_token.
+    Only someone with the exact token can view the slot details.
+    """
+    serializer_class = SlotDetailsSerializer
+    permission_classes = [IsAuthenticated]
+    lookup_field = 'share_token'
+    lookup_url_kwarg = 'token'
+
+    def get_queryset(self):
+        return NewsletterSlot.objects.all()
+
+    def retrieve(self, request, *args, **kwargs):
+        try:
+            slot = NewsletterSlot.objects.get(share_token=kwargs['token'])
+        except NewsletterSlot.DoesNotExist:
+            return Response(
+                {"detail": "Invalid or expired share link."},
+                status=404
+            )
+
+        serializer = self.get_serializer(slot)
+        response_data = dict(serializer.data)
+
+        # Add share_url for reference
+        response_data['share_url'] = f"http://72.61.251.114/authorswap/api/slots/shared/{slot.share_token}/"
+
+        # Add user's books so they can pick one to send a request
+        from core.models import Book
+        from core.serializers import BookSerializer
+        user_books = Book.objects.filter(user=request.user)
+        response_data['my_books'] = list(BookSerializer(user_books, many=True, context={'request': request}).data)
+
+        # Check if user already sent a request for this slot
+        sent_request = SwapRequest.objects.filter(slot=slot, requester=request.user).exists()
+        response_data['sent_request'] = sent_request
+
+        return Response(response_data)

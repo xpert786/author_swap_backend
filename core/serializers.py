@@ -138,10 +138,9 @@ class NewsletterSlotSerializer(serializers.ModelSerializer):
         ).count()
 
     def get_share_url(self, obj):
-        """Returns the invitation link if visibility is not public"""
+        """Returns the secret invitation link if visibility is not public"""
         if obj.visibility in ['hidden', 'single_use_private_link', 'friend_only']:
-            # Using the production frontend URL as requested
-            return f"http://72.61.251.114/authorswap-frontend/slot-detail/{obj.id}/"
+            return f"http://72.61.251.114/authorswap/api/slots/shared/{obj.share_token}/"
         return None
 
     def validate(self, data):
