@@ -75,10 +75,10 @@ class Book(models.Model):
     publish_date = models.DateField(blank=True, null=True)
     description = models.TextField(blank=True, default='')    
     # Retailer Links
-    amazon_url = models.URLField(blank=True, null=True)
-    apple_url = models.URLField(blank=True, null=True)
-    kobo_url = models.URLField(blank=True, null=True)
-    barnes_noble_url = models.URLField(blank=True, null=True)
+    site_url = models.TextField(blank=True, null=True)
+    # apple_url = models.TextField(blank=True, null=True)
+    # kobo_url = models.TextField(blank=True, null=True)
+    # barnes_noble_url = models.TextField(blank=True, null=True)
 
     is_primary_promo = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)

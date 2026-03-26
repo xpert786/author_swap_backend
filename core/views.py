@@ -716,10 +716,17 @@ class SwapRequestListView(APIView):
             if SwapRequest.objects.filter(slot=slot, requester=request.user).exists():
                 return Response({"detail": "You have already sent a request for this slot."}, status=status.HTTP_400_BAD_REQUEST)
 
-            # Link validation (Resilient for mock/test links)
-            if book and book.site_url:
-                links = [u.strip() for u in book.site_url.split(',') if u.strip()]
-                for link in links:
+            # Link validation (Resilient for mock/test links or model transition)
+            site_url = getattr(book, 'site_url', None)
+            if book and site_url:
+                links = [u.strip() for u in site_url.split(',') if u.strip()]
+            elif book:
+                # Fallback to old URL fields during transition
+                links = [getattr(book, f, None) for f in ['amazon_url', 'apple_url', 'kobo_url', 'barnes_noble_url']]
+            else:
+                links = []
+
+            for link in links:
                     if link and 'test' not in link and 'localhost' not in link: # Skip check for test/local links
                         try:
                             # We still check for hard 404s on real links, but won't block the whole request

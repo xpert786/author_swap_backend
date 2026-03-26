@@ -282,8 +282,8 @@ class BookSerializer(serializers.ModelSerializer):
                 else:
                     del data['subgenres']
 
-        # Handle multiple URLs in site_url
-        if 'site_url' in data:
+        # Handle multiple URLs in site_url (Only if the model has been updated)
+        if 'site_url' in data and hasattr(self.Meta.model, 'site_url'):
             raw_urls = []
             if hasattr(data, 'getlist'):
                 raw_urls_list = data.getlist('site_url')
@@ -300,6 +300,15 @@ class BookSerializer(serializers.ModelSerializer):
             
             if raw_urls:
                 data['site_url'] = ",".join(raw_urls)
+        elif 'site_url' in data:
+            # Drop site_url from data if model isn't ready, to prevent Model.create() from crashing
+            if hasattr(data, '_mutable'):
+                mutable = data._mutable
+                data._mutable = True
+                data.pop('site_url', None)
+                data._mutable = mutable
+            else:
+                data.pop('site_url', None)
 
         # Clear book_cover if it's not an actual file upload (string values cause validation error)
         if 'book_cover' in data:
@@ -336,12 +345,13 @@ class BookSerializer(serializers.ModelSerializer):
         else:
             repr['subgenres'] = []
             
-        # Handle site_url
-        if instance.site_url:
-            if isinstance(instance.site_url, str):
-                repr['site_url'] = [u.strip() for u in instance.site_url.split(',') if u.strip()]
+        # Handle site_url with safety check for model transitions
+        site_url_val = getattr(instance, 'site_url', None)
+        if site_url_val:
+            if isinstance(site_url_val, str):
+                repr['site_url'] = [u.strip() for u in site_url_val.split(',') if u.strip()]
             else:
-                repr['site_url'] = instance.site_url
+                repr['site_url'] = site_url_val
         else:
             repr['site_url'] = []
             
@@ -1200,10 +1210,14 @@ class TrackMySwapSerializer(serializers.ModelSerializer):
         if not links and obj.book:
             # Add tracking parameter to the first available site URL
             book_url = "#"
-            if obj.book.site_url:
-                urls = [u.strip() for u in obj.book.site_url.split(',') if u.strip()]
+            site_url_val = getattr(obj.book, 'site_url', None)
+            if site_url_val:
+                urls = [u.strip() for u in site_url_val.split(',') if u.strip()]
                 if urls:
                     book_url = urls[0]
+            else:
+                # Fallback for older model versions during transition
+                book_url = getattr(obj.book, 'amazon_url', '#') or "#"
 
             if '?' in book_url:
                 tracked_url = f"{book_url}&swap_track={obj.id}"
