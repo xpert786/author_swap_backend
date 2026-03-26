@@ -80,6 +80,7 @@ class NewsletterSlotSerializer(serializers.ModelSerializer):
     formatted_send_date_time = serializers.SerializerMethodField()
     current_partners_count = serializers.SerializerMethodField()
     audience_size = serializers.SerializerMethodField()
+    share_url = serializers.SerializerMethodField()
     
     class Meta:
         model = NewsletterSlot
@@ -135,6 +136,12 @@ class NewsletterSlotSerializer(serializers.ModelSerializer):
         return obj.swap_requests.filter(
             status__in=['completed', 'confirmed', 'verified', 'scheduled']
         ).count()
+
+    def get_share_url(self, obj):
+        """Returns the invitation link if visibility is not public"""
+        if obj.visibility in ['hidden', 'single_use_private_link', 'friend_only']:
+            return f"http://72.61.251.114/authorswap-frontend/slot-detail/{obj.id}/"
+        return None
 
     def validate(self, data):
         genre = data.get('preferred_genre')
