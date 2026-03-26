@@ -171,6 +171,7 @@ class ICSExportView(APIView):
             return JsonResponse({
                 'success': True,
                 'user': user.username,
+                'download_url': f"{request.build_absolute_uri(request.path)}",
                 'events_count': len(events),
                 'events': events
             })
