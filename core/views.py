@@ -2260,13 +2260,15 @@ class AuthorDashboardView(APIView):
         recent_activities = recent_activities[:6]
 
         # ─── 4. CAMPAIGN ANALYTICS ───────────────────────────────────
-        campaigns = CampaignAnalytic.objects.filter(user=user).order_by('-date')
+        all_campaigns = CampaignAnalytic.objects.filter(user=user).order_by('-date')
+        
+        # Filter only sent campaigns (date < today) for average calculations
+        sent_campaigns = all_campaigns.filter(date__lt=today)
 
         # Calculate averages for the analytics cards
-        total_campaigns = campaigns.count()
-        if total_campaigns > 0:
+        if sent_campaigns.exists():
             from django.db.models import Avg
-            avg_stats = campaigns.aggregate(
+            avg_stats = sent_campaigns.aggregate(
                 avg_open_rate=Avg('open_rate'),
                 avg_click_rate=Avg('click_rate'),
             )
@@ -2280,8 +2282,8 @@ class AuthorDashboardView(APIView):
         thirty_days_ago = today - timedelta(days=30)
         sixty_days_ago = today - timedelta(days=60)
 
-        current_period = campaigns.filter(date__gte=thirty_days_ago)
-        previous_period = campaigns.filter(date__gte=sixty_days_ago, date__lt=thirty_days_ago)
+        current_period = all_campaigns.filter(date__gte=thirty_days_ago, date__lt=today)
+        previous_period = all_campaigns.filter(date__gte=sixty_days_ago, date__lt=thirty_days_ago)
 
         current_avg_open = 0.0
         current_avg_click = 0.0
@@ -2321,7 +2323,7 @@ class AuthorDashboardView(APIView):
             "open_rate_change": open_rate_change,
             "click_rate_change": click_rate_change,
             "improvement_label": f"+{open_rate_change}% improvement" if open_rate_change > 0 else f"{open_rate_change}% change",
-            "recent_campaigns": CampaignAnalyticSerializer(campaigns[:5], many=True).data,
+            "recent_campaigns": CampaignAnalyticSerializer(all_campaigns[:5], many=True).data,
         }
 
         # ─── 5. QUICK ACTIONS ────────────────────────────────────────
