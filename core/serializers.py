@@ -898,6 +898,10 @@ class SwapHistoryDetailSerializer(serializers.ModelSerializer):
     # Link-Level CTR analysis
     link_ctr_analysis = serializers.SerializerMethodField()
     
+    # NEW fields for the details modal
+    audience = serializers.SerializerMethodField()
+    reliability = serializers.SerializerMethodField()
+
     # Payment status
     payment_done = serializers.SerializerMethodField()
 
@@ -913,6 +917,8 @@ class SwapHistoryDetailSerializer(serializers.ModelSerializer):
             'payment_done',
             'message',
             'rejection_reason',
+            'audience',
+            'reliability'
         ]
 
     def _get_partner(self, obj):
@@ -1024,6 +1030,22 @@ class SwapHistoryDetailSerializer(serializers.ModelSerializer):
             return True
         
         return False
+
+    def get_audience(self, obj):
+        """Returns the partner's verified subscriber count"""
+        partner = self._get_partner(obj)
+        from core.models import SubscriberVerification
+        try:
+            verification = SubscriberVerification.objects.get(user=partner)
+            return verification.active_subscribers
+        except SubscriberVerification.DoesNotExist:
+            return 0
+
+    def get_reliability(self, obj):
+        """Returns the partner's reputation score"""
+        partner = self._get_partner(obj)
+        profile = partner.profiles.first()
+        return profile.reputation_score if profile else 0.0
 
     def get_partner_links(self, obj):
         partner = self._get_partner(obj)
