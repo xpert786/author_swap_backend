@@ -30,7 +30,7 @@ class SlotExploreSerializer(serializers.ModelSerializer):
         model = NewsletterSlot
         fields = [
             'id', 'send_date', 'send_time', 'formatted_send_date_time', 'share_url', 'audience_size', 'visibility', 
-            'status', 'promotion_type', 'price', 'preferred_genre', 
+            'status', 'promotion_type', 'price', 'preferred_genre', 'placement_style', 
             'current_partners_count', 'max_partners', 'author'
         ]
 
@@ -184,7 +184,7 @@ class SlotDetailsSerializer(serializers.ModelSerializer):
         model = NewsletterSlot
         fields = [
             'id', 'author', 'send_date', 'send_time', 'formatted_send_date_time', 'share_url', 'audience_size', 'visibility', 
-            'status', 'preferred_genre', 'current_partners_count', 'max_partners', 'swap_partners'
+            'status', 'preferred_genre', 'placement_style', 'current_partners_count', 'max_partners', 'swap_partners'
         ]
 
     def get_audience_size(self, obj):

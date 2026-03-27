@@ -195,7 +195,13 @@ class NewsletterSlotSerializer(serializers.ModelSerializer):
         if 'price' not in data or data.get('price') in [None, '', 'null']:
             data['price'] = 0.00
 
-        # 4. Flatten subgenres if they are sent as a list
+        # 4. Handle placement_style (map 'middle' to 'mid')
+        if 'placement_style' in data and data.get('placement_style'):
+            val = data['placement_style'].lower()
+            if val == 'middle':
+                data['placement_style'] = 'mid'
+
+        # 5. Flatten subgenres if they are sent as a list
         if 'subgenres' in data and isinstance(data['subgenres'], list):
             data['subgenres'] = ",".join(data['subgenres'])
             

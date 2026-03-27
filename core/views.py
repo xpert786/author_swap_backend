@@ -630,7 +630,7 @@ class NewsletterSlotFilter(FilterSet):
 
     class Meta:
         model = NewsletterSlot
-        fields = ['genre', 'min_audience', 'max_audience', 'min_reputation', 'promotion', 'status', 'start_date', 'end_date']
+        fields = ['genre', 'min_audience', 'max_audience', 'min_reputation', 'promotion', 'status', 'start_date', 'end_date', 'placement_style']
 
 class SwapPartnerDiscoveryView(ListCreateAPIView):
     """
