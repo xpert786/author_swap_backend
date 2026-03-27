@@ -5518,10 +5518,9 @@ class WalletTransactionHistoryView(APIView):
                     transaction.status = 'cancelled'
                     transaction.save()
         
-        # Get all transactions involving this user using Q objects for efficiency and SQLite compatibility
-        # Filter to show only wallet-related transactions (bonus/add_funds, withdrawal)
+        # Filter for all transactions involving this user that represent monetary movement
         from django.db.models import Q
-        wallet_transaction_types = ['bonus', 'withdrawal', 'add_funds']
+        wallet_transaction_types = ['bonus', 'withdrawal', 'add_funds', 'direct_payment', 'swap_payment', 'refund']
         all_transactions = PaymentTransaction.objects.filter(
             Q(sender=user) | Q(receiver=user),
             transaction_type__in=wallet_transaction_types
@@ -5537,7 +5536,6 @@ class WalletTransactionHistoryView(APIView):
             all_transactions = all_transactions.filter(status=status_filter)
         
         # By default, exclude cancelled and pending wallet funding transactions unless explicitly requested
-        # Also exclude pending direct_payment transactions with checkout session IDs (user hasn't paid yet)
         if not status_filter:
             all_transactions = all_transactions.exclude(
                 Q(status='cancelled') | 
@@ -5545,6 +5543,15 @@ class WalletTransactionHistoryView(APIView):
                 Q(transaction_type='direct_payment', status='pending', stripe_payment_intent_id__startswith='cs_')
             )
         
+        # DRF Pagination
+        from .ui_views import StandardResultsSetPagination
+        paginator = StandardResultsSetPagination()
+        page = paginator.paginate_queryset(all_transactions, request)
+        
+        if page is not None:
+            serializer = PaymentTransactionSerializer(page, many=True, context={'request': request})
+            return paginator.get_paginated_response(serializer.data)
+
         serializer = PaymentTransactionSerializer(all_transactions, many=True, context={'request': request})
         return Response(serializer.data)
 
