@@ -254,8 +254,25 @@ class ProfileDetailView(RetrieveUpdateDestroyAPIView):
                 "detail": "Profile not found. Please create your profile first.",
                 "has_profile": False
             })
-        serializer = self.get_serializer(queryset, many=True)
+        profile = queryset.first()
+        serializer = self.get_serializer(profile, context={'request': request})
         return Response(serializer.data)
+
+class PublicProfileDetailView(RetrieveAPIView):
+    """
+    View another author's profile by their user_id.
+    Includes the 'available_slots' field for selecting specific dates.
+    """
+    serializer_class = ProfileSerializer
+    permission_classes = [IsAuthenticated]
+    
+    def get_object(self):
+        user_id = self.kwargs.get('user_id')
+        try:
+            return Profile.objects.select_related('user').get(user_id=user_id)
+        except Profile.DoesNotExist:
+            from rest_framework.exceptions import NotFound
+            raise NotFound({"detail": "Author profile not found."})
         
     def get_serializer(self, *args, **kwargs):
         if 'data' in kwargs:

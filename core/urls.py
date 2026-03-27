@@ -1,7 +1,7 @@
 from django.urls import path
 from .views import (
     CreateNewsletterSlotView, NewsletterSlotDetailView, GenreSubgenreMappingView, 
-    AddBookView, BookDetailView, ProfileDetailView, BookManagementStatsView, 
+    AddBookView, BookDetailView, ProfileDetailView, PublicProfileDetailView, BookManagementStatsView, 
     NewsletterStatsView, NotificationListView, TestWebSocketNotificationView, 
     NewsletterSlotExportView, SwapPartnerDiscoveryView, SwapRequestListView, SwapRequestDetailView,
     MyPotentialBooksView, SwapPartnerDetailView, RecentSwapHistoryView, NotificationUnreadCountView,
@@ -34,6 +34,7 @@ urlpatterns = [
     path('add-book/', AddBookView.as_view(), name='add-book'),
     path('book/<int:pk>/', BookDetailView.as_view(), name='book-detail'),
     path('profile/', ProfileDetailView.as_view(), name='profile-detail'),
+    path('profiles/<int:user_id>/', PublicProfileDetailView.as_view(), name='public-profile-detail'),
     path('book-management-stats/', BookManagementStatsView.as_view(), name='book-management-stats'),
     path('newsletter-dashboard/', NewsletterStatsView.as_view(), name='newsletter-dashboard'),
     path('newsletter-stats/', NewsletterStatsView.as_view(), name='newsletter-stats'),
