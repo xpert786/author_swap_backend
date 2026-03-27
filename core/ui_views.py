@@ -62,10 +62,21 @@ class SlotExploreView(ListAPIView):
         if user.id in partner_ids:
             partner_ids.remove(user.id)
 
+        from django.db.models import Count, F
+        
         # Show public slots OR friend_only slots from past partners
-        return NewsletterSlot.objects.filter(
+        # ALSO: Filter out slots that have already reached their max_partners limit
+        return NewsletterSlot.objects.annotate(
+            active_partners_count=Count(
+                'swap_requests',
+                filter=Q(swap_requests__status__in=['confirmed', 'verified', 'completed', 'sending', 'scheduled'])
+            )
+        ).filter(
             Q(visibility='public') | 
             Q(visibility='friend_only', user_id__in=list(partner_ids))
+        ).filter(
+            active_partners_count__lt=F('max_partners'),
+            status='available'
         ).exclude(user=user).order_by('-created_at')
     
     def list(self, request, *args, **kwargs):

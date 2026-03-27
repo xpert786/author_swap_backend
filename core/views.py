@@ -654,14 +654,23 @@ class SwapPartnerDiscoveryView(ListCreateAPIView):
         for p1, p2 in past_partners:
             partner_ids.add(p1)
             partner_ids.add(p2)
+        from django.db.models import Count, F
         
         if user.id in partner_ids:
             partner_ids.remove(user.id)
 
         # Filter for Public OR Friend Only (if user is a past partner)
-        return NewsletterSlot.objects.filter(
+        # AND Filter for slots that aren't already full
+        return NewsletterSlot.objects.annotate(
+            active_partners_count=Count(
+                'swap_requests',
+                filter=Q(swap_requests__status__in=['confirmed', 'verified', 'completed', 'sending', 'scheduled'])
+            )
+        ).filter(
             Q(visibility='public') | 
-            Q(visibility='friend_only', user_id__in=list(partner_ids)),
+            Q(visibility='friend_only', user_id__in=list(partner_ids))
+        ).filter(
+            active_partners_count__lt=F('max_partners'),
             status='available'
         ).exclude(user=user).order_by('-created_at')
 
