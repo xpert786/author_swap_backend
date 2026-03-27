@@ -648,26 +648,25 @@ class SwapManagementSerializer(serializers.ModelSerializer):
             # If a successful transaction exists, we should trust it
             return True
         
-        # 3. Third fallback: check for ANY completed transaction between these users for this amount
-        # This catches payments that weren't properly linked to the swap
+        # 3. Third fallback: check for ANY completed transaction between these users
         try:
             from decimal import Decimal
             price_decimal = Decimal(str(obj.slot.price))
             
-            # Find transactions between swap participants for the slot price
-            # Where sender is the requester (payer) and receiver is slot owner
-            unlinked_tx = PaymentTransaction.objects.filter(
+            # Find any completed transaction between sender and receiver 
+            # that covers the cost, even if auto-detect linked it to a wrong swap ID initially.
+            matching_tx = PaymentTransaction.objects.filter(
                 sender=obj.requester,
                 receiver=obj.slot.user,
-                amount=price_decimal,
                 status='completed',
-                swap_request__isnull=True  # Not linked to any swap yet
+                amount__gte=price_decimal
             ).first()
             
-            if unlinked_tx:
-                # Auto-link this transaction to the swap for future queries
-                unlinked_tx.swap_request = obj
-                unlinked_tx.save()
+            if matching_tx:
+                # Optionally link it if it's currently completely blank
+                if matching_tx.swap_request is None:
+                    matching_tx.swap_request = obj
+                    matching_tx.save()
                 return True
                 
         except Exception:
@@ -1871,32 +1870,55 @@ class PaymentTransactionSerializer(serializers.ModelSerializer):
         read_only_fields = ['sender', 'receiver', 'stripe_payment_intent_id', 'stripe_transfer_id']
 
     def get_amount(self, obj):
-        # Only show negative for withdrawals
-        if obj.transaction_type == 'withdrawal':
+        request = self.context.get('request')
+        user = request.user if request else None
+        
+        # If I am the sender, it's a deduction (negative)
+        if user and obj.sender_id == user.id and obj.receiver_id != user.id:
             return f"-{obj.amount}"
             
-        # Everything else (direct payments, etc.) shows as positive
-        return str(obj.amount)
+        # If I am the receiver (and not also sender), it's an addition (positive)
+        return f"+{obj.amount}"
 
     def get_amount_color(self, obj):
-        # Withdrawals are red
-        if obj.transaction_type == 'withdrawal':
+        request = self.context.get('request')
+        user = request.user if request else None
+        
+        # Money going OUT of my wallet is red
+        if user and obj.sender_id == user.id and obj.receiver_id != user.id:
             return 'red'
-        # Everything else can be green
+            
+        # Money coming INTO my wallet is green
         return 'green'
 
     def get_description(self, obj):
-        desc = obj.description
-        # If the description contains a Swap ID, we improve it by showing the receiver's name instead of just the number
-        # Example: "Internal payment for Swap ID: 119" -> "Internal payment for jkrowling"
-        if obj.receiver and "Swap ID:" in desc:
-            try:
-                # Part before "Swap ID:"
-                base_desc = desc.split("Swap ID:")[0].strip()
-                return f"{base_desc} for {obj.receiver.username}"
-            except:
-                return desc
-        return desc
+        request = self.context.get('request')
+        user = request.user if request else None
+        
+        # 1. Logic for RECIPIENT viewing their history
+        if user and obj.receiver_id == user.id:
+            # If I funded my own wallet
+            if obj.sender_id == user.id:
+                return "Wallet funding success"
+            # If system paid me
+            if not obj.sender:
+                return "System credit / Bonus"
+            # If another user paid me
+            return f"Payment received from {obj.sender.username}"
+            
+        # 2. Logic for SENDER viewing their history
+        if user and obj.sender_id == user.id:
+            # Withdrawal to bank
+            if obj.transaction_type == 'withdrawal':
+                return "Withdrawal to bank account"
+            # Payment to another user
+            if obj.receiver_id != user.id:
+                return f"Payment sent to {obj.receiver.username}"
+            # Internal funding
+            return "Wallet funding"
+            
+        # Fallback to the saved description
+        return obj.description
     
     def get_sender_profile(self, obj):
         if obj.sender:
