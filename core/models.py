@@ -256,6 +256,9 @@ class SwapRequest(models.Model):
     # Completion
     completed_at = models.DateTimeField(blank=True, null=True)
     
+    # Optional override Link for this swap
+    site_url = models.TextField(blank=True, null=True, help_text="Optional custom tracking link for this swap")
+
     # Tracking for Reputation (New)
     tracking_number = models.CharField(max_length=100, blank=True, null=True, help_text="Campaign ID or Send confirmation ID")
     shipped_at = models.DateTimeField(blank=True, null=True)

@@ -29,6 +29,24 @@ class ProfileSerializer(serializers.ModelSerializer):
 
     username = serializers.CharField(source='user.username', read_only=True)
 
+    available_slots = serializers.SerializerMethodField()
+
+    def get_available_slots(self, obj):
+        from .models import NewsletterSlot
+        from django.utils import timezone
+        today = timezone.now().date()
+        
+        # Get public and available slots from today onwards
+        slots = NewsletterSlot.objects.filter(
+            user=obj.user,
+            status='available',
+            visibility='public',
+            send_date__gte=today
+        ).order_by('send_date')
+        
+        # Re-use the serializer for nested output
+        return NewsletterSlotSerializer(slots, many=True, context=self.context).data
+
     def to_representation(self, instance):
         data = super().to_representation(instance)
 
@@ -402,6 +420,7 @@ class SwapRequestSerializer(serializers.ModelSerializer):
         read_only_fields = ['requester', 'created_at']
         extra_kwargs = {
             'message': {'required': False},
+            'site_url': {'required': False, 'allow_blank': True},
         }
         
     def to_internal_value(self, data):
@@ -409,13 +428,37 @@ class SwapRequestSerializer(serializers.ModelSerializer):
         if hasattr(data, 'copy'):
             data = data.copy()
             
-        # Clear empty strings for message to prevent validation issues
+        # 1. Clear empty strings for message to prevent validation issues
         if 'message' in data and data.get('message') == '':
             if hasattr(data, 'pop'):
                 data.pop('message', None)
             else:
                 del data['message']
-                
+
+        # 2. Handle site_url list/string mapping
+        if 'site_url' in data:
+            raw_urls = []
+            if hasattr(data, 'getlist'):
+                raw_urls_list = data.getlist('site_url')
+                if len(raw_urls_list) == 1 and isinstance(raw_urls_list[0], str) and ',' in raw_urls_list[0]:
+                    raw_urls = [u.strip() for u in raw_urls_list[0].split(',') if u.strip()]
+                else:
+                    raw_urls = [u.strip() for u in raw_urls_list if isinstance(u, str) and u.strip()]
+            else:
+                val = data.get('site_url')
+                if isinstance(val, str):
+                    raw_urls = [u.strip() for u in val.split(',') if u.strip()]
+                elif isinstance(val, list):
+                    raw_urls = [u.strip() for u in val if isinstance(u, str) and u.strip()]
+            
+            if raw_urls:
+                data['site_url'] = ",".join(raw_urls)
+            else:
+                if hasattr(data, 'pop'):
+                    data.pop('site_url', None)
+                else:
+                    del data['site_url']
+                    
         return super().to_internal_value(data)
 
 
@@ -447,6 +490,19 @@ class SwapRequestSerializer(serializers.ModelSerializer):
                 indicators["reliability_match"] = diff <= 1.0
                 
         return indicators
+
+    def to_representation(self, instance):
+        repr = super().to_representation(instance)
+        # Handle site_url list representation
+        site_url_val = getattr(instance, 'site_url', None)
+        if site_url_val:
+            if isinstance(site_url_val, str):
+                repr['site_url'] = [u.strip() for u in site_url_val.split(',') if u.strip()]
+            else:
+                repr['site_url'] = site_url_val
+        else:
+            repr['site_url'] = []
+        return repr
 
 
 class SwapManagementSerializer(serializers.ModelSerializer):
