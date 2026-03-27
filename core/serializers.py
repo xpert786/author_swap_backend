@@ -434,14 +434,26 @@ class SwapRequestSerializer(serializers.ModelSerializer):
         if hasattr(data, 'copy'):
             data = data.copy()
             
-        # 1. Clear empty strings for message to prevent validation issues
+        # 1. Map 'placement' to 'preferred_placement' and 'max_partners' to 'max_partners_acknowledged'
+        if 'placement' in data:
+            val = data.get('placement', '').lower()
+            # Map 'mid' or 'middle' consistently
+            if val == 'mid' or val == 'middle':
+                data['preferred_placement'] = 'middle'
+            else:
+                data['preferred_placement'] = val
+            
+        if 'max_partners' in data:
+            data['max_partners_acknowledged'] = data.get('max_partners')
+
+        # 2. Clear empty strings for message to prevent validation issues
         if 'message' in data and data.get('message') == '':
             if hasattr(data, 'pop'):
                 data.pop('message', None)
             else:
                 del data['message']
 
-        # 2. Handle site_url list/string mapping
+        # 3. Handle site_url list/string mapping
         if 'site_url' in data:
             raw_urls = []
             if hasattr(data, 'getlist'):
@@ -466,6 +478,13 @@ class SwapRequestSerializer(serializers.ModelSerializer):
                     del data['site_url']
                     
         return super().to_internal_value(data)
+
+    def to_representation(self, instance):
+        repr_data = super().to_representation(instance)
+        # Consistent with frontend payload
+        repr_data['placement'] = instance.preferred_placement
+        repr_data['max_partners'] = instance.max_partners_acknowledged
+        return repr_data
 
 
 
