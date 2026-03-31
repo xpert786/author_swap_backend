@@ -547,29 +547,29 @@ class PaymentTransaction(models.Model):
                     logger.info(f"Transaction completed for swap {self.swap_request.id}, current status: {self.swap_request.status}")
                     
                     swap = self.swap_request
-                    # Update swap status to completed if payment is done
-                    if swap.status in ['pending', 'scheduled', 'confirmed', 'accepted']:
+                    # Update swap status to scheduled (not completed) when payment is done
+                    # Swap should only be 'completed' after newsletter is actually sent
+                    if swap.status in ['pending', 'confirmed', 'accepted']:
                         old_status = swap.status
-                        swap.status = 'completed'
-                        swap.completed_at = timezone.now()
+                        swap.status = 'scheduled'
                         swap.save()
                         
-                        logger.info(f"Swap {swap.id} status updated from {old_status} to completed")
+                        logger.info(f"Swap {swap.id} status updated from {old_status} to scheduled (payment received)")
                         
-                        # Create notification for swap completion
+                        # Create notification for payment received and swap scheduled
                         Notification.objects.create(
                             recipient=swap.requester,
-                            title="✅ Swap Completed!",
+                            title="✅ Payment Confirmed & Swap Scheduled!",
                             badge="SWAP",
-                            message=f"Your swap with {swap.slot.user.username} has been completed successfully.",
+                            message=f"Your payment for swap with {swap.slot.user.username} has been confirmed. The swap is now scheduled!",
                             action_url=f"/dashboard/swaps/track/{swap.id}/"
                         )
                         
                         Notification.objects.create(
                             recipient=swap.slot.user,
-                            title="✅ Swap Completed!",
+                            title="✅ Swap Scheduled!",
                             badge="SWAP",
-                            message=f"Your swap with {swap.requester.username} has been completed successfully.",
+                            message=f"Payment received from {swap.requester.username}. Your swap is now scheduled!",
                             action_url=f"/dashboard/swaps/track/{swap.id}/"
                         )
                     else:
