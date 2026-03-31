@@ -176,6 +176,28 @@ class NewsletterSlotSerializer(serializers.ModelSerializer):
                         "subgenres": f"'{sub}' is not a valid subgenre for {genre}. "
                                      f"Please only select from the {genre} list."
                     })
+        
+        # ── Date uniqueness validation ─────────────────────────────────
+        # Only allow one slot per date per user
+        send_date = data.get('send_date')
+        if send_date:
+            request = self.context.get('request')
+            if request and request.user:
+                from core.models import NewsletterSlot
+                # Check if user already has a slot on this date
+                existing_slot = NewsletterSlot.objects.filter(
+                    user=request.user,
+                    send_date=send_date
+                ).first()
+                
+                if existing_slot:
+                    # If updating an existing slot, allow same date
+                    instance_id = getattr(self.instance, 'id', None) if self.instance else None
+                    if existing_slot.id != instance_id:
+                        raise serializers.ValidationError({
+                            "send_date": f"You already have a newsletter slot on {send_date}. Only one slot is allowed per date."
+                        })
+        
         return data
 
     def to_internal_value(self, data):
