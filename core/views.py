@@ -1237,7 +1237,7 @@ class AcceptSwapView(APIView):
         if swap.status not in ['pending']:
             return Response({"detail": f"Cannot accept a swap in '{swap.status}' state."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Check if slot is free (no payment required) OR if payment is already completed
+        # Check if slot is free (no payment required)
         slot = swap.slot
         is_free_slot = slot.promotion_type == 'free' or (slot.price is None or slot.price == 0)
         
@@ -1251,13 +1251,15 @@ class AcceptSwapView(APIView):
                 payment_completed = False
         
         # Update status logic:
-        # - Free slot: mark as completed immediately
-        # - Paid slot with payment done: mark as scheduled (ready for newsletter send)
-        # - Paid slot without payment: mark as scheduled but payment pending
+        # - Free slot: mark as completed immediately (no payment needed)
+        # - Paid slot: always mark as scheduled (regardless of payment status)
+        #   Swap becomes completed only when BOTH authors have paid/newsletter sent
         if is_free_slot:
             swap.status = 'completed'
             swap.completed_at = timezone.now()
         else:
+            # Paid slot - always scheduled after acceptance
+            # Payment completion doesn't change this to completed
             swap.status = 'scheduled'
         swap.save()
 
