@@ -670,8 +670,33 @@ class SwapManagementSerializer(serializers.ModelSerializer):
             # If a successful transaction exists, we should trust it
             return True
         
-        # 3. Third fallback - Removed as it was too aggressive and could incorrectly link transactions
-        # to the wrong swap if multiple swaps existed between the same users for the same amount.
+        # 3. Additional check: for direct payments that might not be linked properly,
+        # check if there's a completed direct_payment transaction between these users
+        # for a matching amount within a reasonable time window
+        from django.db.models import Q
+        from django.utils import timezone
+        from datetime import timedelta
+        
+        # Get the sender (requester) and receiver (slot owner)
+        sender = obj.requester
+        receiver = obj.slot.user
+        price = obj.slot.price or 0
+        
+        # Look for direct payment transactions between these users within 24h
+        direct_tx = PaymentTransaction.objects.filter(
+            Q(sender=sender, receiver=receiver) | Q(sender=receiver, receiver=sender),
+            transaction_type='direct_payment',
+            status='completed',
+            created_at__gte=timezone.now() - timedelta(hours=24),
+            amount=price
+        ).first()
+        
+        if direct_tx:
+            # Found a matching direct payment - link it to this swap for future
+            if not direct_tx.swap_request:
+                direct_tx.swap_request = obj
+                direct_tx.save(update_fields=['swap_request'])
+            return True
 
         return False
 
