@@ -1074,9 +1074,47 @@ class SwapHistoryDetailSerializer(serializers.ModelSerializer):
         if not is_paid:
             return False
         
+        # 1. Check SwapPayment record
         payment = getattr(obj, 'payment', None)
         if payment and payment.status == 'completed':
             return True
+        
+        # 2. Check for linked PaymentTransaction
+        from core.models import PaymentTransaction
+        from django.db.models import Q
+        from django.utils import timezone
+        from datetime import timedelta
+        from decimal import Decimal
+        
+        tx_exists = PaymentTransaction.objects.filter(
+            swap_request=obj, 
+            status='completed'
+        ).exists()
+        
+        if tx_exists:
+            return True
+        
+        # 3. Check for direct payment transactions between these users
+        sender = obj.requester
+        receiver = obj.slot.user
+        price = obj.slot.price or 0
+        
+        direct_tx = PaymentTransaction.objects.filter(
+            Q(sender=sender, receiver=receiver) | Q(sender=receiver, receiver=sender),
+            transaction_type='direct_payment',
+            status='completed',
+            created_at__gte=timezone.now() - timedelta(hours=24),
+        ).first()
+        
+        if direct_tx:
+            tx_amount = Decimal(str(direct_tx.amount))
+            expected_price = Decimal(str(price))
+            if abs(tx_amount - expected_price) <= Decimal('0.01'):
+                # Auto-link for future
+                if not direct_tx.swap_request:
+                    direct_tx.swap_request = obj
+                    direct_tx.save(update_fields=['swap_request'])
+                return True
         
         return False
 
