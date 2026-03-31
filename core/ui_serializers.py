@@ -164,7 +164,8 @@ class AuthorDetailedProfileSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'name', 'profile_picture', 'swaps_completed', 'reputation_score', 'rating',
             'avg_open_rate', 'avg_click_rate', 'monthly_growth', 'send_reliability_percent',
-            'confirmed_sends_score', 'timeliness_score', 'missed_sends_penalty', 'communication_score'
+            'confirmed_sends_score', 'timeliness_score', 'missed_sends_penalty', 'communication_score',
+            'bio'
         ]
 
     def get_swaps_completed(self, obj):
