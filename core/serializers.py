@@ -956,6 +956,9 @@ class SwapHistoryDetailSerializer(serializers.ModelSerializer):
     
     # Override status to return completed when payment is done
     status = serializers.SerializerMethodField()
+    
+    # Partner email
+    partner_email = serializers.SerializerMethodField()
 
     class Meta:
         model = SwapRequest
