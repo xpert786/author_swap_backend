@@ -676,6 +676,7 @@ class SwapManagementSerializer(serializers.ModelSerializer):
         from django.db.models import Q
         from django.utils import timezone
         from datetime import timedelta
+        from decimal import Decimal
         
         # Get the sender (requester) and receiver (slot owner)
         sender = obj.requester
@@ -683,20 +684,24 @@ class SwapManagementSerializer(serializers.ModelSerializer):
         price = obj.slot.price or 0
         
         # Look for direct payment transactions between these users within 24h
+        # Use a small tolerance for amount comparison (0.01 difference allowed)
         direct_tx = PaymentTransaction.objects.filter(
             Q(sender=sender, receiver=receiver) | Q(sender=receiver, receiver=sender),
             transaction_type='direct_payment',
             status='completed',
             created_at__gte=timezone.now() - timedelta(hours=24),
-            amount=price
         ).first()
         
         if direct_tx:
-            # Found a matching direct payment - link it to this swap for future
-            if not direct_tx.swap_request:
-                direct_tx.swap_request = obj
-                direct_tx.save(update_fields=['swap_request'])
-            return True
+            tx_amount = Decimal(str(direct_tx.amount))
+            expected_price = Decimal(str(price))
+            # Allow small tolerance for amount comparison
+            if abs(tx_amount - expected_price) <= Decimal('0.01'):
+                # Found a matching direct payment - link it to this swap for future
+                if not direct_tx.swap_request:
+                    direct_tx.swap_request = obj
+                    direct_tx.save(update_fields=['swap_request'])
+                return True
 
         return False
 
