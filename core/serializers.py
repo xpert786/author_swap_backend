@@ -953,6 +953,9 @@ class SwapHistoryDetailSerializer(serializers.ModelSerializer):
 
     # Payment status
     payment_done = serializers.SerializerMethodField()
+    
+    # Override status to return completed when payment is done
+    status = serializers.SerializerMethodField()
 
     class Meta:
         model = SwapRequest
@@ -1061,6 +1064,23 @@ class SwapHistoryDetailSerializer(serializers.ModelSerializer):
             'rejected': 'Swap Rejected',
         }
         return labels.get(obj.status, obj.get_status_display())
+    
+    def get_status(self, obj):
+        """Return 'completed' if payment is done for paid swaps"""
+        # If already completed/verified, return as-is
+        if obj.status in ['completed', 'verified']:
+            return 'completed'
+        
+        # For paid swaps, check if payment is done
+        if obj.slot:
+            prom_type = str(obj.slot.promotion_type).lower() if obj.slot.promotion_type else ''
+            price_val = obj.slot.price or 0
+            is_paid = prom_type == 'paid' or price_val > 0
+            
+            if is_paid and self.get_payment_done(obj):
+                return 'completed'
+        
+        return obj.status
     
     def get_payment_done(self, obj):
         # Check if payment is completed for paid swaps
