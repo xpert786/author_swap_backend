@@ -590,20 +590,18 @@ class SwapManagementSerializer(serializers.ModelSerializer):
         is_paid_slot = self.get_eligible_for_pay(obj)
         payment_is_done = self.get_payment_done(obj)
         
-        # 1. Paid slot logic: payment completion results in 'completed' status
-        # BUT only if swap is accepted (not pending)
-        if is_paid_slot and obj.status in ['confirmed', 'scheduled', 'verified']:
-            if payment_is_done:
-                return 'completed'
-            # If payment not done, show as scheduled
-            return 'scheduled'
-        
-        # 2. Date-based logic for non-paid (or unpaid fallback) slots
+        # 1. Date-based logic (Highest priority for completion)
         if obj.status in ['confirmed', 'completed', 'scheduled', 'verified']:
             from django.utils import timezone
-            # If the scheduled date has passed, show as 'completed' (or verified if really finished)
-            if obj.scheduled_date and obj.scheduled_date <= timezone.now().date():
+            # Use swap.scheduled_date or fallback to slot.send_date
+            check_date = obj.scheduled_date or (obj.slot.send_date if obj.slot else None)
+            
+            if check_date and check_date <= timezone.now().date():
                 return 'completed' if obj.status != 'verified' else 'verified'
+        
+        # 2. Paid slot logic: If paid, it's still 'scheduled' until the date passes
+        if is_paid_slot and obj.status in ['confirmed', 'scheduled', 'verified']:
+            # Even if payment is done, it's NOT completed until it actually happens
             return 'scheduled'
             
         return obj.status
@@ -659,7 +657,8 @@ class SwapManagementSerializer(serializers.ModelSerializer):
                 sender=obj.requester,
                 receiver=obj.slot.user,
                 status='completed',
-                amount__gte=price_decimal
+                amount__gte=price_decimal,
+                swap_request__isnull=True # Only match if not already linked to another swap
             ).first()
             
             if matching_tx:

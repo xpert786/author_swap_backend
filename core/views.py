@@ -1261,6 +1261,15 @@ class AcceptSwapView(APIView):
             # Paid slot - always scheduled after acceptance
             # Payment completion doesn't change this to completed
             swap.status = 'scheduled'
+        
+        # Ensure scheduled_date is set from the slot
+        if slot.send_date:
+            swap.scheduled_date = slot.send_date
+        elif not swap.scheduled_date:
+            # Fallback for old records without slot send_date (though slot date is required)
+            from django.utils import timezone
+            swap.scheduled_date = timezone.now().date()
+
         swap.save()
 
         # Check if slot should be booked based on current accepted swaps
