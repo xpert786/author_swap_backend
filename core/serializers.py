@@ -605,23 +605,24 @@ class SwapManagementSerializer(serializers.ModelSerializer):
         if request and obj.status == 'pending' and obj.requester_id == request.user.id:
             return 'sending'
         
-        # If status is already completed, show it (for free slots accepted immediately)
-        if obj.status == 'completed':
-            return 'completed'
+        # If status is already completed or verified, show it (actual newsletter has been sent)
+        if obj.status in ['completed', 'verified']:
+            return obj.status
             
         is_paid_slot = self.get_eligible_for_pay(obj)
         payment_is_done = self.get_payment_done(obj)
         
-        # 1. Paid slot logic: payment completion results in 'completed' status
-        # BUT only if swap is accepted (not pending)
-        if is_paid_slot and obj.status in ['confirmed', 'scheduled', 'verified']:
+        # 1. Paid slot logic: payment completion should show 'scheduled', not 'completed'
+        # Swap is only 'completed' when newsletter is actually sent, not when payment is done
+        if is_paid_slot and obj.status in ['confirmed', 'scheduled', 'accepted']:
             if payment_is_done:
-                return 'completed'
-            # If payment not done, show as scheduled
+                # Payment done = swap is scheduled to happen
+                return 'scheduled'
+            # If payment not done, show as scheduled (waiting for payment)
             return 'scheduled'
         
         # 2. Date-based logic for non-paid (or unpaid fallback) slots
-        if obj.status in ['confirmed', 'completed', 'scheduled', 'verified']:
+        if obj.status in ['confirmed', 'scheduled', 'accepted']:
             from django.utils import timezone
             # If the scheduled date has passed, show as 'completed' (or verified if really finished)
             if obj.scheduled_date and obj.scheduled_date <= timezone.now().date():
