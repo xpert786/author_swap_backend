@@ -5672,10 +5672,24 @@ class DirectPaymentView(APIView):
         
         # Check sender's wallet balance
         sender_wallet, created = UserWallet.objects.get_or_create(user=sender)
-        payment_method = request.data.get('payment_method', 'wallet')
-
-        # Scenario A: User has enough balance in their internal wallet AND didn't force stripe
-        if sender_wallet.balance >= amount and payment_method != 'stripe':
+        payment_method = request.data.get('payment_method', 'wallet')  # 'wallet' or 'card'
+        
+        # Validate payment_method
+        if payment_method not in ['wallet', 'card']:
+            return Response({
+                'detail': 'Invalid payment_method. Use "wallet" or "card".'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # If user explicitly chose wallet, check balance first
+        if payment_method == 'wallet':
+            if sender_wallet.balance < amount:
+                return Response({
+                    'detail': 'Insufficient wallet balance.',
+                    'current_balance': str(sender_wallet.balance),
+                    'required_amount': str(amount),
+                    'available_payment_methods': ['card']  # Suggest card as alternative
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
             # Create transaction
             transaction = PaymentTransaction.objects.create(
                 sender=sender,
@@ -5704,14 +5718,14 @@ class DirectPaymentView(APIView):
                 return Response({
                     'detail': f'Wallet payment failed: {str(e)}'
                 }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-        # Scenario B: Wallet balance is low, try Stripe if configured
+        
+        # User chose card payment - use Stripe
         if not settings.STRIPE_SECRET_KEY:
             return Response({
-                'detail': 'Insufficient balance and Stripe is not configured.',
+                'detail': 'Card payment is not configured. Please use wallet payment.',
                 'current_balance': str(sender_wallet.balance)
             }, status=status.HTTP_400_BAD_REQUEST)
-
+        
         stripe.api_key = settings.STRIPE_SECRET_KEY.strip()
         
         try:
@@ -6242,156 +6256,5 @@ class ConfirmAddFundsView(APIView):
             import logging
             logging.getLogger(__name__).error(f"Confirm Funds Error: {str(e)}")
             return Response({
-                'detail': f'Failed to confirm funds: {str(e)}'
+                'detail': f'Failed to confirm payment: {str(e)}'
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-
-class PaySwapWithWalletView(APIView):
-    """
-    POST /api/payments/swap/wallet/
-    
-    Pay for a swap request using wallet balance.
-    
-    Body: {
-        "swap_request_id": 123
-    }
-    
-    Response (success):
-        {
-            "detail": "Payment completed successfully using wallet!",
-            "payment_type": "wallet",
-            "payment": {...},
-            "new_balance": "45.00"
-        }
-    
-    Response (insufficient balance):
-        {
-            "detail": "Insufficient wallet balance.",
-            "current_balance": "10.00",
-            "required_amount": "25.00",
-            "payment_options": ["card", "stripe_checkout"]
-        }
-    """
-    permission_classes = [IsAuthenticated]
-
-    def post(self, request):
-        swap_request_id = request.data.get('swap_request_id')
-        
-        if not swap_request_id:
-            return Response(
-                {"detail": "swap_request_id is required."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        try:
-            swap_request = SwapRequest.objects.get(id=swap_request_id, requester=request.user)
-        except SwapRequest.DoesNotExist:
-            return Response(
-                {"detail": "Swap request not found."},
-                status=status.HTTP_404_NOT_FOUND
-            )
-        
-        # Get the slot and check if it's a paid slot
-        slot = swap_request.slot
-        prom_type = str(slot.promotion_type).lower() if slot.promotion_type else ''
-        slot_price = slot.price or 0
-        
-        # A slot requires payment if promotion_type is 'paid' OR price > 0
-        if prom_type != 'paid' and slot_price <= 0:
-            return Response(
-                {"detail": "This slot does not require payment."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        # Check if payment already exists and is completed
-        existing_payment = getattr(swap_request, 'payment', None)
-        if existing_payment and existing_payment.status == 'completed':
-            return Response(
-                {"detail": "Payment has already been completed for this swap request."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        # Check user's wallet balance
-        sender_wallet, created = UserWallet.objects.get_or_create(user=request.user)
-        
-        if sender_wallet.balance < slot_price:
-            # Return payment options if wallet doesn't have enough
-            return Response({
-                "detail": "Insufficient wallet balance.",
-                "current_balance": str(sender_wallet.balance),
-                "required_amount": str(slot_price),
-                "payment_options": ["card", "stripe_checkout"]
-            }, status=status.HTTP_400_BAD_REQUEST)
-        
-        try:
-            # Deduct from wallet
-            sender_wallet.withdraw_balance(slot_price)
-            
-            # Create/update SwapPayment record
-            payment, created = SwapPayment.objects.update_or_create(
-                swap_request=swap_request,
-                defaults={
-                    'payer': request.user,
-                    'amount': slot_price,
-                    'currency': 'USD',
-                    'payment_method': 'wallet',
-                    'status': 'completed',
-                    'paid_at': timezone.now(),
-                }
-            )
-            
-            # Create payment transaction
-            receiver = swap_request.slot.user
-            transaction = PaymentTransaction.objects.create(
-                sender=request.user,
-                receiver=receiver,
-                amount=slot_price,
-                transaction_type='swap_payment',
-                swap_payment=payment,
-                swap_request=swap_request,
-                description=f"Wallet payment for swap request #{swap_request.id}",
-                status='completed',
-                completed_at=timezone.now()
-            )
-            
-            # Add balance to receiver's wallet
-            receiver_wallet, _ = UserWallet.objects.get_or_create(user=receiver)
-            receiver_wallet.add_balance(slot_price)
-            
-            # Create notifications
-            Notification.objects.create(
-                recipient=receiver,
-                title="Payment Received! 💰",
-                badge="WALLET",
-                message=f"{request.user.username} has paid ${slot_price} from their wallet for swap #{swap_request.id}.",
-                action_url=f"/dashboard/swaps/manage/"
-            )
-            
-            Notification.objects.create(
-                recipient=request.user,
-                title="Payment Sent",
-                badge="PAYMENT",
-                message=f"${slot_price} has been deducted from your wallet for swap #{swap_request.id}. Remaining balance: ${sender_wallet.balance}",
-                action_url=f"/dashboard/swaps/track/{swap_request.id}/"
-            )
-            
-            return Response({
-                "detail": "Payment completed successfully using wallet!",
-                "payment_type": "wallet",
-                "payment": {
-                    "id": payment.id,
-                    "amount": str(payment.amount),
-                    "status": payment.status,
-                    "payment_method": payment.payment_method,
-                    "paid_at": payment.paid_at,
-                },
-                "new_balance": str(sender_wallet.balance)
-            })
-            
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).error(f"Wallet Payment Error: {str(e)}")
-            return Response(
-                {"detail": f"Payment failed: {str(e)}"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )

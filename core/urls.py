@@ -18,7 +18,6 @@ from .views import (
     SetupIntentView, SavedPaymentMethodsView, DeletePaymentMethodView, SetDefaultPaymentMethodView,
     PreviewPlanChangeView, SyncSubscriptionView, UpgradeSubscriptionView,
     WalletView, WalletTransactionHistoryView, WithdrawFundsView, DirectPaymentView, AddFundsView, ConfirmAddFundsView,
-    PaySwapWithWalletView,
 )
 from .calendar_views import (
     GoogleCalendarExportView, OutlookCalendarExportView, ICSExportView, CalendarExportOptionsView
@@ -98,7 +97,6 @@ urlpatterns = [
     path('stripe/create-swap-checkout-session/', CreateSwapCheckoutSessionView.as_view(), name='stripe-create-swap-session'),
     path('stripe/sync-swap-payment/', SyncSwapPaymentView.as_view(), name='stripe-sync-swap-payment'),
     path('stripe/confirm-swap-payment/<int:swap_request_id>/', ConfirmSwapPaymentView.as_view(), name='stripe-confirm-swap-payment'),
-    path('payments/swap/wallet/', PaySwapWithWalletView.as_view(), name='pay-swap-wallet'),
     path('stripe/change-plan/', ChangePlanView.as_view(), name='stripe-change-plan'),
     path('stripe/change-plan/preview/', PreviewPlanChangeView.as_view(), name='stripe-change-plan-preview'),
     path('stripe/setup-intent/', SetupIntentView.as_view(), name='stripe-setup-intent'),
