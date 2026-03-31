@@ -4280,25 +4280,18 @@ class ConfirmSwapPaymentView(APIView):
         # Get the payment record
         payment = getattr(swap_request, 'payment', None)
         if not payment:
-            # If no payment record exists, but the receiver is manually confirming, 
-            # we create a 'placeholder' completed payment so the swap can finish.
-            from core.models import SwapPayment
-            from django.utils import timezone
-            payment = SwapPayment.objects.create(
-                swap_request=swap_request,
-                payer=swap_request.requester,
-                amount=swap_request.slot.price or 0,
-                status='completed',
-                paid_at=timezone.now(),
-                stripe_checkout_session_id="manual_confirmation"
+            # No payment record exists - cannot confirm
+            return Response(
+                {'detail': 'No payment record found. Payment must be completed through Stripe first.'},
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Check if payment is completed (if it existed but was pending)
+        # Check if payment is completed through Stripe
         if payment.status != 'completed':
-            from django.utils import timezone
-            payment.status = 'completed'
-            payment.paid_at = timezone.now()
-            payment.save(update_fields=['status', 'paid_at'])
+            return Response(
+                {'detail': 'Payment has not been completed yet. Please complete payment first.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         # Check if already confirmed
         if payment.receiver_confirmed:
