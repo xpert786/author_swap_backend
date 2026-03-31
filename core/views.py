@@ -1122,8 +1122,8 @@ class SwapManagementListView(APIView):
         'pending': ['pending'],
         'sending': ['sending'],
         'rejected': ['rejected'],
-        'scheduled': ['scheduled', 'completed', 'confirmed'],
-        'completed': ['verified'],
+        'scheduled': ['scheduled'],
+        'completed': ['completed', 'verified'],
     }
 
     def get(self, request):
