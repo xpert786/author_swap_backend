@@ -1254,12 +1254,16 @@ class AcceptSwapView(APIView):
         # - Free slot: mark as completed immediately (no payment needed)
         # - Paid slot: always mark as scheduled (regardless of payment status)
         #   Swap becomes completed only when BOTH authors have paid/newsletter sent
+        
+        # Always populate the scheduled date from the slot
+        swap.scheduled_date = slot.send_date
+        
         if is_free_slot:
             swap.status = 'completed'
             swap.completed_at = timezone.now()
         else:
             # Paid slot - always scheduled after acceptance
-            # Payment completion doesn't change this to completed
+            # Payment completion doesn't change this to completed in DB
             swap.status = 'scheduled'
         swap.save()
 

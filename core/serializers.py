@@ -648,29 +648,8 @@ class SwapManagementSerializer(serializers.ModelSerializer):
             # If a successful transaction exists, we should trust it
             return True
         
-        # 3. Third fallback: check for ANY completed transaction between these users
-        try:
-            from decimal import Decimal
-            price_decimal = Decimal(str(obj.slot.price))
-            
-            # Find any completed transaction between sender and receiver 
-            # that covers the cost, even if auto-detect linked it to a wrong swap ID initially.
-            matching_tx = PaymentTransaction.objects.filter(
-                sender=obj.requester,
-                receiver=obj.slot.user,
-                status='completed',
-                amount__gte=price_decimal
-            ).first()
-            
-            if matching_tx:
-                # Optionally link it if it's currently completely blank
-                if matching_tx.swap_request is None:
-                    matching_tx.swap_request = obj
-                    matching_tx.save()
-                return True
-                
-        except Exception:
-            pass  # Ignore any errors in this fallback
+        # 3. Third fallback - Removed as it was too aggressive and could incorrectly link transactions
+        # to the wrong swap if multiple swaps existed between the same users for the same amount.
 
         return False
 
