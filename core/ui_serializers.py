@@ -158,18 +158,58 @@ class AuthorDetailedProfileSerializer(serializers.ModelSerializer):
     """Extended author profile with analytics and reputation for details modal"""
     swaps_completed = serializers.SerializerMethodField()
     rating = serializers.FloatField(source='reputation_score', read_only=True)
+    
+    # User-related fields
+    user = serializers.IntegerField(source='user.id', read_only=True)
+    username = serializers.CharField(source='user.username', read_only=True)
+    email = serializers.CharField(source='user.email', read_only=True)
+    
+    # Social URLs
+    instagram_url = serializers.CharField(read_only=True)
+    tiktok_url = serializers.CharField(read_only=True)
+    facebook_url = serializers.CharField(read_only=True)
+    website = serializers.CharField(read_only=True)
+    
+    # Location and pen name
+    pen_name = serializers.CharField(read_only=True)
+    location = serializers.CharField(read_only=True)
+    
+    # Advanced reputation fields
+    is_webhook_verified = serializers.BooleanField(read_only=True)
+    platform_ranking_position = serializers.IntegerField(read_only=True)
+    platform_ranking_percentile = serializers.IntegerField(read_only=True)
+    confirmed_sends_success_rate = serializers.FloatField(read_only=True)
+    timeliness_success_rate = serializers.FloatField(read_only=True)
+    missed_sends_count = serializers.IntegerField(read_only=True)
+    avg_response_time_hours = serializers.FloatField(read_only=True)
+    
+    # Timestamps and settings
+    created_at = serializers.DateTimeField(read_only=True)
+    auto_approve_friends = serializers.BooleanField(read_only=True)
+    auto_approve_min_reputation = serializers.FloatField(read_only=True)
+    
+    # Friends - return list of friend IDs
+    friends = serializers.SerializerMethodField()
 
     class Meta:
         model = Profile
         fields = [
-            'id', 'name', 'profile_picture', 'swaps_completed', 'reputation_score', 'rating',
+            'id', 'user', 'username', 'email', 'name', 'pen_name', 'profile_picture', 'location',
+            'primary_genre', 'bio', 'instagram_url', 'tiktok_url', 'facebook_url', 'website',
+            'swaps_completed', 'reputation_score', 'rating',
             'avg_open_rate', 'avg_click_rate', 'monthly_growth', 'send_reliability_percent',
             'confirmed_sends_score', 'timeliness_score', 'missed_sends_penalty', 'communication_score',
-            'bio'
+            'is_webhook_verified', 'platform_ranking_position', 'platform_ranking_percentile',
+            'confirmed_sends_success_rate', 'timeliness_success_rate', 'missed_sends_count',
+            'avg_response_time_hours', 'created_at', 'auto_approve_friends', 'auto_approve_min_reputation',
+            'friends'
         ]
 
     def get_swaps_completed(self, obj):
         return obj.swaps_completed
+        
+    def get_friends(self, obj):
+        return list(obj.friends.values_list('id', flat=True))
 
 class SlotDetailsSerializer(serializers.ModelSerializer):
     """Serializer for Figma Screen 1 - Slot Details Modal"""
