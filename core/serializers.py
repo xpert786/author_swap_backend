@@ -961,7 +961,7 @@ class SwapHistoryDetailSerializer(serializers.ModelSerializer):
         model = SwapRequest
         fields = [
             'id', 'status',
-            'partner_name', 'partner_label', 'partner_genre', 'partner_profile_picture',
+            'partner_name', 'partner_label', 'partner_genre', 'partner_profile_picture', 'partner_email',
             'request_date', 'completed_date', 'status_label',
             'partner_links',
             'promoting_book',
@@ -1005,6 +1005,11 @@ class SwapHistoryDetailSerializer(serializers.ModelSerializer):
             return profile.profile_picture.url
         return None
 
+    def get_partner_email(self, obj):
+        """Return the partner's email address"""
+        partner = self._get_partner(obj)
+        return partner.email if partner else None
+
     def get_request_date(self, obj):
         if obj.created_at:
             return obj.created_at.strftime("%d %b, %Y")
@@ -1018,9 +1023,19 @@ class SwapHistoryDetailSerializer(serializers.ModelSerializer):
             is_paid = prom_type == 'paid' or price_val > 0
             
             if is_paid:
+                # Check SwapPayment record
                 payment = getattr(obj, 'payment', None)
                 if payment and payment.status == 'completed' and payment.paid_at:
                     return payment.paid_at.strftime("%d %b, %Y")
+                
+                # Check for linked PaymentTransaction
+                from core.models import PaymentTransaction
+                tx = PaymentTransaction.objects.filter(
+                    swap_request=obj, 
+                    status='completed'
+                ).first()
+                if tx and tx.completed_at:
+                    return tx.completed_at.strftime("%d %b, %Y")
         
         # For non-paid swaps or if payment not completed, show actual completion date
         if obj.completed_at:
