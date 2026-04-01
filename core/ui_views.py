@@ -46,11 +46,10 @@ class SlotExploreView(ListAPIView):
     def get_queryset(self):
         user = self.request.user
         
-        # Get list of users the current user has completed swaps with (Friends)
-        # Search in both sent and received requests
+        # Identify "Friends" as authors with whom a swap has been confirmed, scheduled, or completed
         past_partners = SwapRequest.objects.filter(
             Q(requester=user) | Q(slot__user=user),
-            status__in=['completed', 'verified']
+            status__in=['confirmed', 'scheduled', 'sending', 'completed', 'verified']
         ).values_list('requester', 'slot__user')
         
         # Flatten and unique the user ID list

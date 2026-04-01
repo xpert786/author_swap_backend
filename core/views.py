@@ -641,10 +641,10 @@ class SwapPartnerDiscoveryView(ListCreateAPIView):
     def get_queryset(self):
         user = self.request.user
         
-        # Identify "Friends" as authors with whom a swap has been completed/verified
+        # Identify "Friends" as authors with whom a swap has been confirmed, scheduled, or completed
         past_partners = SwapRequest.objects.filter(
             Q(requester=user) | Q(slot__user=user),
-            status__in=['completed', 'verified']
+            status__in=['confirmed', 'scheduled', 'sending', 'completed', 'verified']
         ).values_list('requester', 'slot__user')
         
         partner_ids = set()
