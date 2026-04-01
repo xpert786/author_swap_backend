@@ -1276,8 +1276,8 @@ class TrackMySwapSerializer(serializers.ModelSerializer):
     # Status
     status_label = serializers.SerializerMethodField()
 
-    # Partner Links
-    partner_links = serializers.SerializerMethodField()
+    # Custom site URLs for tracking
+    site_url = serializers.SerializerMethodField()
     
     # Link Level CTR
     link_level_ctr = serializers.SerializerMethodField()
@@ -1290,7 +1290,7 @@ class TrackMySwapSerializer(serializers.ModelSerializer):
             'promoting_book',
             'deadline', 'request_date', 'countdown_label',
             'status_label',
-            'partner_links',
+            'site_url',
             'link_level_ctr',
             'message',
         ]
@@ -1384,17 +1384,11 @@ class TrackMySwapSerializer(serializers.ModelSerializer):
         }
         return labels.get(obj.status, obj.get_status_display())
 
-    def get_partner_links(self, obj):
-        partner = self._get_partner(obj)
-        profile = partner.profiles.first()
-        if not profile:
-            return {}
-        return {
-            "website": profile.website or None,
-            "facebook": profile.facebook_url or None,
-            "instagram": profile.instagram_url or None,
-            "twitter": profile.tiktok_url or None,
-        }
+    def get_site_url(self, obj):
+        return [
+            "http://72.61.251.114/authorswap/api/swaps/?tab=all Request Method GET Status Code 200 OK Remote Address 72.61.251.114:80 Referrer Policy strict-origin-when-cross-origin",
+            "https://www.amazon.com/dp/0593336828"
+        ]
     
     def get_link_level_ctr(self, obj):
         """Returns link level CTR data for this swap"""
