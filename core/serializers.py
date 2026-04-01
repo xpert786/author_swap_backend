@@ -612,7 +612,7 @@ class SwapManagementSerializer(serializers.ModelSerializer):
     class Meta:
         model = SwapRequest
         fields = [
-            'id', 'status', 'message', 'created_at',
+            'id', 'status', 'message', 'created_at', 'completed_at',
             'author_id', 'sender_id', 'receiver_id', 'author_name', 'sender_name', 
             'author_genre_label', 'profile_picture',
             'audience_size', 'reliability_score',
