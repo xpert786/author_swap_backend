@@ -768,9 +768,17 @@ class SwapManagementSerializer(serializers.ModelSerializer):
         return None
 
     def get_audience_size(self, obj):
-        # Use the slot's audience_size (synced from MailerLite)
-        slot = obj.slot
-        return f"{slot.audience_size:,}+" if slot else "0"
+        # Use the partner's active subscriber count (synced from MailerLite)
+        partner = self.get_partner_user(obj)
+        from core.models import SubscriberVerification
+        try:
+            verification = SubscriberVerification.objects.get(user=partner)
+            size = verification.active_subscribers
+            return f"{size:,}+"
+        except SubscriberVerification.DoesNotExist:
+            # Fallback to the slot's audience_size if no verification record exists
+            slot = obj.slot
+            return f"{slot.audience_size:,}+" if slot else "0"
 
     def get_reliability_score(self, obj):
         partner = self.get_partner_user(obj)
