@@ -938,8 +938,8 @@ class SwapHistoryDetailSerializer(serializers.ModelSerializer):
     # Status banner
     status_label = serializers.SerializerMethodField()
 
-    # Partner's social links
-    partner_links = serializers.SerializerMethodField()
+    # Custom site URLs for tracking
+    site_url = serializers.SerializerMethodField()
 
     # Promoting book info
     promoting_book = serializers.SerializerMethodField()
@@ -966,7 +966,7 @@ class SwapHistoryDetailSerializer(serializers.ModelSerializer):
             'id', 'status',
             'partner_name', 'partner_label', 'partner_genre', 'partner_profile_picture', 'partner_email',
             'request_date', 'completed_date', 'status_label',
-            'partner_links',
+            'site_url',
             'promoting_book',
             'link_ctr_analysis',
             'payment_done',
@@ -1172,17 +1172,11 @@ class SwapHistoryDetailSerializer(serializers.ModelSerializer):
         profile = partner.profiles.first()
         return profile.reputation_score if profile else 0.0
 
-    def get_partner_links(self, obj):
-        partner = self._get_partner(obj)
-        profile = partner.profiles.first()
-        if not profile:
-            return {}
-        return {
-            "website": profile.website or None,
-            "facebook": profile.facebook_url or None,
-            "instagram": profile.instagram_url or None,
-            "twitter": profile.tiktok_url or None,  # Using tiktok field for now
-        }
+    def get_site_url(self, obj):
+        return [
+            "http://72.61.251.114/authorswap/api/swaps/?tab=all Request Method GET Status Code 200 OK Remote Address 72.61.251.114:80 Referrer Policy strict-origin-when-cross-origin",
+            "https://www.amazon.com/dp/0593336828"
+        ]
 
     def get_promoting_book(self, obj):
         # 🎯 Intelligent Context Switching for Book History:
