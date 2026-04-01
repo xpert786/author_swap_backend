@@ -395,9 +395,6 @@ class NewsletterStatsView(APIView):
             "confirmed_swaps": SwapRequest.objects.filter(
                 slot__in=all_slots, status__in=confirmed_statuses
             ).count(),
-            "verified_sent": SwapRequest.objects.filter(
-                slot__in=all_slots, status__in=verified_statuses
-            ).count()
         }
 
         # --- 2. CALENDAR DATA (filtered) ---
@@ -1154,31 +1151,6 @@ class SwapManagementListView(APIView):
             'requester', 'slot', 'book'
         ).order_by('-created_at')
 
-        # Status filtering (takes priority over tab filtering)
-        if status_filter:
-            if tab == 'pending':
-                qs = qs.filter(slot__user=user, status='pending')
-            elif tab == 'sending':
-                qs = qs.filter(requester=user, status='pending')
-            elif tab == 'rejected':
-                qs = qs.filter(status='rejected')
-            elif tab == 'scheduled':
-                qs = qs.filter(status='scheduled')
-            elif tab == 'completed':
-                qs = qs.filter(status__in=['completed', 'verified'])
-        else:
-            # Tab filtering (only if no explicit status filter)
-            if tab == 'pending':
-                qs = qs.filter(slot__user=user, status='pending')
-            elif tab == 'sending':
-                qs = qs.filter(requester=user, status='pending')
-            elif tab == 'rejected':
-                qs = qs.filter(status='rejected')
-            elif tab == 'scheduled':
-                qs = qs.filter(status='scheduled')
-            elif tab == 'completed':
-                qs = qs.filter(status__in=['completed', 'verified'])
-
         # Search by author name, book title, or date
         if search:
             qs = qs.filter(
@@ -1188,35 +1160,61 @@ class SwapManagementListView(APIView):
                 Q(slot__send_date__icontains=search)
             ).distinct()
 
-        # Removed blocking sync_profile_audience loop to prevent API cancellation/timeout.
-        # This should be handled by a background task or a separate endpoint.
-
+        # We must serialize all results to determine their "effective status"
+        # as the serializer has complex logic (dates, payments) that can't be easily
+        # matched in a single DB query for tab counts and results categorization.
         serializer = SwapManagementSerializer(qs, many=True, context={'request': request})
+        all_serialized_data = serializer.data
 
-        # Tab counts for the badge numbers on each tab
-        all_qs = SwapRequest.objects.filter(Q(slot__user=user) | Q(requester=user))
-        
-        # If status filter is provided, use it for counts
+        # Initialize tab counts
+        tab_counts = {
+            'all': len(all_serialized_data),
+            'pending': 0,
+            'sending': 0,
+            'rejected': 0,
+            'scheduled': 0,
+            'completed': 0,
+        }
+
+        # Categorize results and calculate counts
+        final_results = []
+        for item in all_serialized_data:
+            item_status = item.get('status')
+            
+            # Increment counts based on effective status
+            if item_status == 'pending':
+                tab_counts['pending'] += 1
+            elif item_status == 'sending':
+                tab_counts['sending'] += 1
+            elif item_status == 'rejected':
+                tab_counts['rejected'] += 1
+            elif item_status == 'scheduled':
+                tab_counts['scheduled'] += 1
+            elif item_status in ['completed', 'verified']:
+                tab_counts['completed'] += 1
+
+            # Filter results for the current tab
+            # 'sending' result matches 'sending' tab, 'pending' result matches 'pending' tab
+            if tab == 'all':
+                final_results.append(item)
+            elif tab == item_status:
+                final_results.append(item)
+            elif tab == 'completed' and item_status == 'verified':
+                final_results.append(item)
+
+        # Apply explicit status_filter if provided
         if status_filter:
+            final_results = [r for r in all_serialized_data if r.get('status') == status_filter]
             tab_counts = {
-                'all': all_qs.count(),
-                'filtered': all_qs.filter(status=status_filter).count(),
-            }
-        else:
-            tab_counts = {
-                'all': all_qs.count(),
-                'pending': all_qs.filter(slot__user=user, status='pending').count(),
-                'sending': all_qs.filter(requester=user, status='pending').count(),
-                'rejected': all_qs.filter(status='rejected').count(),
-                'scheduled': all_qs.filter(status='scheduled').count(),
-                'completed': all_qs.filter(status__in=['completed', 'verified']).count(),
+                'all': len(all_serialized_data),
+                'filtered': len(final_results)
             }
 
         return Response({
             'tab': tab,
             'status_filter': status_filter if status_filter else None,
             'tab_counts': tab_counts,
-            'results': serializer.data,
+            'results': final_results,
         })
 
 
