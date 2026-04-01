@@ -1513,7 +1513,16 @@ class TrackMySwapView(APIView):
         from core.models import SwapLinkClick
         if not swap.link_clicks.exists() and swap.book:
             # Create default tracking link for the swap
-            destination_url = getattr(swap.book, 'amazon_url', None) or getattr(swap.book, 'website_url', None) or "#"
+            # Priority: 1. swap.site_url (custom URL for this swap), 2. book.site_url (comma-separated URLs), 3. "#"
+            destination_url = "#"
+            if swap.site_url:
+                destination_url = swap.site_url
+            elif swap.book.site_url:
+                # site_url is comma-separated, take the first one
+                urls = [u.strip() for u in swap.book.site_url.split(',') if u.strip()]
+                if urls:
+                    destination_url = urls[0]
+            
             SwapLinkClick.objects.get_or_create(
                 swap=swap,
                 link_name=f"Swap Promo - {swap.book.title}",
@@ -1906,8 +1915,15 @@ class SubscriberAnalyticsView(APIView):
                     if swap.requester.profiles.first():
                         partner_name = swap.requester.profiles.first().name
                     
-                    # Get book URL and add tracking parameter
-                    book_url = getattr(swap.book, 'amazon_url', '#') or "#"
+                    # Get book URL with proper priority: 1. swap.site_url, 2. book.site_url, 3. "#"
+                    book_url = "#"
+                    if swap.site_url:
+                        book_url = swap.site_url
+                    elif swap.book.site_url:
+                        urls = [u.strip() for u in swap.book.site_url.split(',') if u.strip()]
+                        if urls:
+                            book_url = urls[0]
+                    
                     if '?' in book_url and book_url != '#':
                         tracked_url = f"{book_url}&swap_track={swap.id}"
                     else:
