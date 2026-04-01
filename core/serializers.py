@@ -1183,10 +1183,23 @@ class SwapHistoryDetailSerializer(serializers.ModelSerializer):
         return profile.reputation_score if profile else 0.0
 
     def get_site_url(self, obj):
-        return [
-            "http://72.61.251.114/authorswap/api/swaps/?tab=all Request Method GET Status Code 200 OK Remote Address 72.61.251.114:80 Referrer Policy strict-origin-when-cross-origin",
-            "https://www.amazon.com/dp/0593336828"
-        ]
+        # 🎯 Use real URL provided by the author:
+        # 1. Custom URL for this swap specifically
+        if obj.site_url:
+            return [obj.site_url]
+            
+        # 2. Fallback to Book's site_url(s)
+        if obj.book:
+            if obj.book.site_url:
+                urls = [u.strip() for u in obj.book.site_url.split(',') if u.strip()]
+                if urls:
+                    return urls
+            
+            # 3. Final fallback to Amazon URL
+            if hasattr(obj.book, 'amazon_url') and obj.book.amazon_url:
+                return [obj.book.amazon_url]
+        
+        return []
 
     def get_promoting_book(self, obj):
         # 🎯 Intelligent Context Switching for Book History:
@@ -1385,10 +1398,23 @@ class TrackMySwapSerializer(serializers.ModelSerializer):
         return labels.get(obj.status, obj.get_status_display())
 
     def get_site_url(self, obj):
-        return [
-            "http://72.61.251.114/authorswap/api/swaps/?tab=all Request Method GET Status Code 200 OK Remote Address 72.61.251.114:80 Referrer Policy strict-origin-when-cross-origin",
-            "https://www.amazon.com/dp/0593336828"
-        ]
+        # 🎯 Use real URL provided by the author:
+        # 1. Custom URL for this swap specifically
+        if obj.site_url:
+            return [obj.site_url]
+            
+        # 2. Fallback to Book's site_url(s)
+        if obj.book:
+            if obj.book.site_url:
+                urls = [u.strip() for u in obj.book.site_url.split(',') if u.strip()]
+                if urls:
+                    return urls
+            
+            # 3. Final fallback to Amazon URL
+            if hasattr(obj.book, 'amazon_url') and obj.book.amazon_url:
+                return [obj.book.amazon_url]
+        
+        return []
     
     def get_link_level_ctr(self, obj):
         """Returns link level CTR data for this swap"""
