@@ -177,25 +177,49 @@ class NewsletterSlotSerializer(serializers.ModelSerializer):
                                      f"Please only select from the {genre} list."
                     })
         
-        # ── Date uniqueness validation ─────────────────────────────────
-        # Only allow one slot per date per user
+        # ── Date + Time Period uniqueness validation ─────────────────────────────────
+        # Allow multiple slots per date, but only one per time period (Morning/Afternoon/Evening/Night)
         send_date = data.get('send_date')
+        send_time = data.get('send_time')
         if send_date:
             request = self.context.get('request')
             if request and request.user:
                 from core.models import NewsletterSlot
-                # Check if user already has a slot on this date
-                existing_slot = NewsletterSlot.objects.filter(
+                
+                # Calculate time period for the new slot
+                def get_time_period(time_val):
+                    if not time_val:
+                        return "Flexible"
+                    hour = time_val.hour if hasattr(time_val, 'hour') else int(str(time_val).split(':')[0])
+                    if 0 <= hour < 12:
+                        return "Morning"
+                    elif 12 <= hour < 17:
+                        return "Afternoon"
+                    elif 17 <= hour < 21:
+                        return "Evening"
+                    else:
+                        return "Night"
+                
+                new_time_period = get_time_period(send_time)
+                
+                # Check if user already has a slot on this date with the same time period
+                existing_slots = NewsletterSlot.objects.filter(
                     user=request.user,
                     send_date=send_date
-                ).first()
+                )
                 
-                if existing_slot:
-                    # If updating an existing slot, allow same date
+                for existing_slot in existing_slots:
+                    existing_period = existing_slot.time_period  # Uses the model property
+                    
+                    # If updating an existing slot, skip checking against itself
                     instance_id = getattr(self.instance, 'id', None) if self.instance else None
-                    if existing_slot.id != instance_id:
+                    if existing_slot.id == instance_id:
+                        continue
+                    
+                    # Only conflict if same time period (or both are Flexible)
+                    if existing_period == new_time_period:
                         raise serializers.ValidationError({
-                            "send_date": f"You already have a newsletter slot on {send_date}. Only one slot is allowed per date."
+                            "send_date": f"You already have a {new_time_period.lower()} slot on {send_date}. Only one slot is allowed per time period per date."
                         })
         
         return data
