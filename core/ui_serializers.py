@@ -110,20 +110,53 @@ class SlotPartnerSerializer(serializers.ModelSerializer):
         return obj.book.title if obj.book else None
 
     def get_partner_sends_date(self, obj):
-        return obj.offered_slot.send_date if obj.offered_slot else None
+        """Get partner's (requester's) upcoming slot send date"""
+        if obj.offered_slot:
+            return obj.offered_slot.send_date
+        # Fallback: get partner's next upcoming slot
+        from core.models import NewsletterSlot
+        partner_slot = NewsletterSlot.objects.filter(
+            user=obj.requester,
+            send_date__gte=timezone.now().date(),
+            status__in=['available', 'booked']
+        ).order_by('send_date').first()
+        return partner_slot.send_date if partner_slot else None
 
     def get_partner_sends_time(self, obj):
-        return obj.offered_slot.send_time if obj.offered_slot else None
+        """Get partner's (requester's) upcoming slot send time"""
+        if obj.offered_slot:
+            return obj.offered_slot.send_time
+        # Fallback: get partner's next upcoming slot
+        from core.models import NewsletterSlot
+        partner_slot = NewsletterSlot.objects.filter(
+            user=obj.requester,
+            send_date__gte=timezone.now().date(),
+            status__in=['available', 'booked']
+        ).order_by('send_date').first()
+        return partner_slot.send_time if partner_slot else None
 
     def get_partner_sends_book(self, obj):
         return obj.requested_book.title if obj.requested_book else None
 
-    def get_partner_audience_size(self, obj):
-        """Return active subscribers count from partner's offered slot"""
-        from core.models import SubscriberVerification
+    def _get_partner_slot(self, obj):
+        """Helper method to get partner's slot (either offered_slot or their next upcoming slot)"""
         if obj.offered_slot:
+            return obj.offered_slot
+        # Fallback: get partner's next upcoming slot
+        from core.models import NewsletterSlot
+        return NewsletterSlot.objects.filter(
+            user=obj.requester,
+            send_date__gte=timezone.now().date(),
+            status__in=['available', 'booked']
+        ).order_by('send_date').first()
+
+    def get_partner_audience_size(self, obj):
+        """Return active subscribers count from partner's slot"""
+        from core.models import SubscriberVerification
+        partner_slot = self._get_partner_slot(obj)
+        if partner_slot:
             try:
-                verification = SubscriberVerification.objects.get(user=obj.offered_slot.user)
+                verification = SubscriberVerification.objects.get(user=partner_slot.user)
                 return verification.active_subscribers
             except SubscriberVerification.DoesNotExist:
                 return 0
@@ -144,14 +177,16 @@ class SlotPartnerSerializer(serializers.ModelSerializer):
 
     def get_partner_sends_date_formatted(self, obj):
         """Returns formatted date like 'Friday, May 17'"""
-        if obj.offered_slot and obj.offered_slot.send_date:
-            return obj.offered_slot.send_date.strftime('%A, %B %d')
+        partner_slot = self._get_partner_slot(obj)
+        if partner_slot and partner_slot.send_date:
+            return partner_slot.send_date.strftime('%A, %B %d')
         return None
 
     def get_partner_sends_time_formatted(self, obj):
         """Returns formatted time like '02:00 PM'"""
-        if obj.offered_slot and obj.offered_slot.send_time:
-            return obj.offered_slot.send_time.strftime('%I:%M %p').lstrip('0')
+        partner_slot = self._get_partner_slot(obj)
+        if partner_slot and partner_slot.send_time:
+            return partner_slot.send_time.strftime('%I:%M %p').lstrip('0')
         return None
 
 class AuthorDetailedProfileSerializer(serializers.ModelSerializer):
