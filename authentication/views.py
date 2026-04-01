@@ -36,7 +36,8 @@ def get_onboarding_status(user):
                 profile.website_url or
                 profile.facebook_url or
                 profile.instagram_url or
-                profile.tiktok_url
+                profile.tiktok_url or
+                profile.collaboration_status
             )
         )
 

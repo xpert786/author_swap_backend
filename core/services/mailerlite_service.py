@@ -389,6 +389,14 @@ def sync_subscriber_analytics(user):
         verification.avg_click_rate = round(max(5, min(15, verification.avg_click_rate + random.uniform(-0.1, 0.1))), 1)
         verification.last_verified_at = timezone.now()
         verification.save()
+        
+        # Sync to Profile for Discovery
+        profile = user.profiles.first()
+        if profile:
+            profile.avg_open_rate = verification.avg_open_rate
+            profile.avg_click_rate = verification.avg_click_rate
+            profile.save(update_fields=['avg_open_rate', 'avg_click_rate'])
+        
         return verification
 
     try:
@@ -510,8 +518,14 @@ def sync_subscriber_analytics(user):
                 defaults={'count': verification.active_subscribers}
             )
             
-            # Update average rates from latest campaigns
-            latest_campaigns = CampaignAnalytic.objects.filter(user=user).order_by('-date')[:5]
+            # Update average rates from latest SENT campaigns (exclude future slots/placeholders with 0.0 stats)
+            from datetime import date
+            today = date.today()
+            latest_campaigns = CampaignAnalytic.objects.filter(
+                user=user, 
+                date__lt=today
+            ).order_by('-date')[:5]
+            
             if latest_campaigns.exists():
                 total_open = sum(c.open_rate for c in latest_campaigns)
                 total_click = sum(c.click_rate for c in latest_campaigns)
@@ -522,6 +536,15 @@ def sync_subscriber_analytics(user):
                 # Health Score calculation
                 health_score = int(min(100, (verification.avg_open_rate + (verification.avg_click_rate * 3))))
                 verification.list_health_score = health_score
+                
+                # Sync to Profile for Discovery
+                profile = user.profiles.first()
+                if profile:
+                    profile.avg_open_rate = verification.avg_open_rate
+                    profile.avg_click_rate = verification.avg_click_rate
+                    # Also sync audience size and reliability if they exist
+                    profile.send_reliability_percent = verification.active_rate # Re-using active_rate as proxy or keep separate
+                    profile.save(update_fields=['avg_open_rate', 'avg_click_rate'])
             
             # --- Move Health Metrics outside of campaigns check so they always update ---
             total_active_pool = verification.active_subscribers + verification.unconfirmed_subscribers

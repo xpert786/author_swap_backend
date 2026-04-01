@@ -2,6 +2,7 @@ from django.db import models
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 from decimal import Decimal
+import uuid
 from authentication.constants import PRIMARY_GENRE_CHOICES
 
 User = get_user_model()
@@ -36,6 +37,10 @@ class NewsletterSlot(models.Model):
         default='public'
     )
     
+    
+    # Secret token for private/hidden slot sharing (no default here to avoid migration issues)
+    share_token = models.UUIDField(null=True, blank=True, unique=True)
+    
     # Advanced Discovery Fields
     PLACEMENT_CHOICES = [('top', 'Top'), ('mid', 'Mid'), ('bottom', 'Bottom'), ('any', 'Any')]
     placement_style = models.CharField(max_length=20, choices=PLACEMENT_CHOICES, default='any')
@@ -50,6 +55,10 @@ class NewsletterSlot(models.Model):
     
     created_at = models.DateTimeField(auto_now_add=True)
 
+    def save(self, *args, **kwargs):
+        if not self.share_token:
+            self.share_token = uuid.uuid4()
+        super().save(*args, **kwargs)
 
     def __str__(self):   
         return f"{self.preferred_genre} slot on {self.send_date}"
@@ -63,13 +72,13 @@ class Book(models.Model):
     price_tier = models.CharField(max_length=50, blank=True, null=True, choices=[('discount', 'Discount'), ('free', 'Free'), ('standard', 'Standard'), ('0.99', '$0.99')], default='standard')
     book_cover = models.ImageField(upload_to='book_covers/', blank=True, null=True, max_length=255)
     availability = models.CharField(max_length=50,choices=[('all','All'),('wide','Wide'),('kindle_unlimited','Kindle Unlimited')],default='all')
-    publish_date = models.DateField()
-    description = models.TextField()    
+    publish_date = models.DateField(blank=True, null=True)
+    description = models.TextField(blank=True, default='')    
     # Retailer Links
-    amazon_url = models.URLField(blank=True, null=True)
-    apple_url = models.URLField(blank=True, null=True)
-    kobo_url = models.URLField(blank=True, null=True)
-    barnes_noble_url = models.URLField(blank=True, null=True)
+    site_url = models.TextField(blank=True, null=True)
+    # apple_url = models.TextField(blank=True, null=True)
+    # kobo_url = models.TextField(blank=True, null=True)
+    # barnes_noble_url = models.TextField(blank=True, null=True)
 
     is_primary_promo = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
@@ -82,9 +91,10 @@ class Profile(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='profiles')
     email = models.EmailField(blank=True, null=True)
     name = models.CharField(max_length=100)
+    pen_name = models.CharField(max_length=255, blank=True, null=True)
     profile_picture = models.ImageField(upload_to='profile_pictures/', blank=True, null=True, max_length=255)
     location = models.CharField(max_length=100, blank=True, null=True)
-    primary_genre = models.CharField(max_length=50, choices=PRIMARY_GENRE_CHOICES, blank=True, default='')
+    primary_genre = models.CharField(max_length=255, blank=True, default='')
     bio = models.TextField(blank=True, default='')
     instagram_url = models.URLField(blank=True, null=True)
     tiktok_url = models.URLField(blank=True, null=True)
@@ -246,6 +256,9 @@ class SwapRequest(models.Model):
     # Completion
     completed_at = models.DateTimeField(blank=True, null=True)
     
+    # Optional override Link for this swap
+    site_url = models.TextField(blank=True, null=True, help_text="Optional custom tracking link for this swap")
+
     # Tracking for Reputation (New)
     tracking_number = models.CharField(max_length=100, blank=True, null=True, help_text="Campaign ID or Send confirmation ID")
     shipped_at = models.DateTimeField(blank=True, null=True)
@@ -534,29 +547,29 @@ class PaymentTransaction(models.Model):
                     logger.info(f"Transaction completed for swap {self.swap_request.id}, current status: {self.swap_request.status}")
                     
                     swap = self.swap_request
-                    # Update swap status to completed if payment is done
-                    if swap.status in ['pending', 'scheduled', 'confirmed', 'accepted']:
+                    # Update swap status to scheduled (not completed) when payment is done
+                    # Swap should only be 'completed' after newsletter is actually sent
+                    if swap.status in ['pending', 'confirmed', 'accepted']:
                         old_status = swap.status
-                        swap.status = 'completed'
-                        swap.completed_at = timezone.now()
+                        swap.status = 'scheduled'
                         swap.save()
                         
-                        logger.info(f"Swap {swap.id} status updated from {old_status} to completed")
+                        logger.info(f"Swap {swap.id} status updated from {old_status} to scheduled (payment received)")
                         
-                        # Create notification for swap completion
+                        # Create notification for payment received and swap scheduled
                         Notification.objects.create(
                             recipient=swap.requester,
-                            title="✅ Swap Completed!",
+                            title="✅ Payment Confirmed & Swap Scheduled!",
                             badge="SWAP",
-                            message=f"Your swap with {swap.slot.user.username} has been completed successfully.",
+                            message=f"Your payment for swap with {swap.slot.user.username} has been confirmed. The swap is now scheduled!",
                             action_url=f"/dashboard/swaps/track/{swap.id}/"
                         )
                         
                         Notification.objects.create(
                             recipient=swap.slot.user,
-                            title="✅ Swap Completed!",
+                            title="✅ Swap Scheduled!",
                             badge="SWAP",
-                            message=f"Your swap with {swap.requester.username} has been completed successfully.",
+                            message=f"Payment received from {swap.requester.username}. Your swap is now scheduled!",
                             action_url=f"/dashboard/swaps/track/{swap.id}/"
                         )
                     else:

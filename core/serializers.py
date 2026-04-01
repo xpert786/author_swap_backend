@@ -29,6 +29,24 @@ class ProfileSerializer(serializers.ModelSerializer):
 
     username = serializers.CharField(source='user.username', read_only=True)
 
+    available_slots = serializers.SerializerMethodField()
+
+    def get_available_slots(self, obj):
+        from .models import NewsletterSlot
+        from django.utils import timezone
+        today = timezone.now().date()
+        
+        # Get public and available slots from today onwards
+        slots = NewsletterSlot.objects.filter(
+            user=obj.user,
+            status='available',
+            visibility='public',
+            send_date__gte=today
+        ).order_by('send_date')
+        
+        # Re-use the serializer for nested output
+        return NewsletterSlotSerializer(slots, many=True, context=self.context).data
+
     def to_representation(self, instance):
         data = super().to_representation(instance)
 
@@ -77,8 +95,10 @@ class NewsletterSlotSerializer(serializers.ModelSerializer):
     time_period = serializers.ReadOnlyField()
     formatted_time = serializers.SerializerMethodField(required=False)
     formatted_date = serializers.SerializerMethodField()
+    formatted_send_date_time = serializers.SerializerMethodField()
     current_partners_count = serializers.SerializerMethodField()
     audience_size = serializers.SerializerMethodField()
+    share_url = serializers.SerializerMethodField()
     
     class Meta:
         model = NewsletterSlot
@@ -95,10 +115,28 @@ class NewsletterSlotSerializer(serializers.ModelSerializer):
             # %I is 12-hour clock, %M is minutes, %p is AM/PM
             return obj.send_time.strftime("%I:%M %p")
         return None
+        
     def get_formatted_date(self, obj):
         if obj.send_date:
             return obj.send_date.strftime("%d-%m-%Y")
         return None
+
+    def get_formatted_send_date_time(self, obj):
+        """Returns formatted date and time like 'Wednesday, May 15 at 10:00 AM EST'"""
+        if not obj.send_date:
+            return None
+        
+        # Format the date: Wednesday, May 15
+        date_str = obj.send_date.strftime('%A, %B %d')
+        
+        if obj.send_time:
+            # Format the time: 10:00 AM
+            # lstrip('0') removes leading zero for hours (e.g. 09:00 -> 9:00)
+            time_str = obj.send_time.strftime('%I:%M %p').lstrip('0')
+            return f"{date_str} at {time_str} EST"
+        
+        # Fallback if no time is specified
+        return f"{date_str} (Flexible)"
         
     def get_audience_size(self, obj):
         # Prefer the 'active_subscribers' from user's verification profile
@@ -117,6 +155,12 @@ class NewsletterSlotSerializer(serializers.ModelSerializer):
             status__in=['completed', 'confirmed', 'verified', 'scheduled']
         ).count()
 
+    def get_share_url(self, obj):
+        """Returns the secret invitation link if visibility is not public"""
+        if obj.visibility in ['hidden', 'single_use_private_link', 'friend_only']:
+            return f"http://72.61.251.114/authorswap/api/slots/shared/{obj.share_token}/"
+        return None
+
     def validate(self, data):
         genre = data.get('preferred_genre')
         subs = data.get('subgenres', [])
@@ -132,6 +176,52 @@ class NewsletterSlotSerializer(serializers.ModelSerializer):
                         "subgenres": f"'{sub}' is not a valid subgenre for {genre}. "
                                      f"Please only select from the {genre} list."
                     })
+        
+        # ── Date + Time Period uniqueness validation ─────────────────────────────────
+        # Allow multiple slots per date, but only one per time period (Morning/Afternoon/Evening/Night)
+        send_date = data.get('send_date')
+        send_time = data.get('send_time')
+        if send_date:
+            request = self.context.get('request')
+            if request and request.user:
+                from core.models import NewsletterSlot
+                
+                # Calculate time period for the new slot
+                def get_time_period(time_val):
+                    if not time_val:
+                        return "Flexible"
+                    hour = time_val.hour if hasattr(time_val, 'hour') else int(str(time_val).split(':')[0])
+                    if 0 <= hour < 12:
+                        return "Morning"
+                    elif 12 <= hour < 17:
+                        return "Afternoon"
+                    elif 17 <= hour < 21:
+                        return "Evening"
+                    else:
+                        return "Night"
+                
+                new_time_period = get_time_period(send_time)
+                
+                # Check if user already has a slot on this date with the same time period
+                existing_slots = NewsletterSlot.objects.filter(
+                    user=request.user,
+                    send_date=send_date
+                )
+                
+                for existing_slot in existing_slots:
+                    existing_period = existing_slot.time_period  # Uses the model property
+                    
+                    # If updating an existing slot, skip checking against itself
+                    instance_id = getattr(self.instance, 'id', None) if self.instance else None
+                    if existing_slot.id == instance_id:
+                        continue
+                    
+                    # Only conflict if same time period (or both are Flexible)
+                    if existing_period == new_time_period:
+                        raise serializers.ValidationError({
+                            "send_date": f"You already have a {new_time_period.lower()} slot on {send_date}. Only one slot is allowed per time period per date."
+                        })
+        
         return data
 
     def to_internal_value(self, data):
@@ -151,7 +241,13 @@ class NewsletterSlotSerializer(serializers.ModelSerializer):
         if 'price' not in data or data.get('price') in [None, '', 'null']:
             data['price'] = 0.00
 
-        # 4. Flatten subgenres if they are sent as a list
+        # 4. Handle placement_style (map 'middle' to 'mid')
+        if 'placement_style' in data and data.get('placement_style'):
+            val = data['placement_style'].lower()
+            if val == 'middle':
+                data['placement_style'] = 'mid'
+
+        # 5. Flatten subgenres if they are sent as a list
         if 'subgenres' in data and isinstance(data['subgenres'], list):
             data['subgenres'] = ",".join(data['subgenres'])
             
@@ -185,11 +281,11 @@ class BookSerializer(serializers.ModelSerializer):
         read_only_fields = ['user']
         extra_kwargs = {
             'price_tier': {'required': True},
-            'amazon_url': {'required': True},
-            'apple_url': {'required': True},
-            'kobo_url': {'required': True},
-            'barnes_noble_url': {'required': True},
+            'site_url': {'required': False, 'allow_blank': True},
             'availability': {'required': True},
+            'book_cover': {'required': False},
+            'publish_date': {'required': False},
+            'description': {'required': False},
         }
 
     def get_swap_count(self, obj):
@@ -240,7 +336,7 @@ class BookSerializer(serializers.ModelSerializer):
                     raw_subs = [s.strip() for s in val if isinstance(s, str) and s.strip()]
                 elif isinstance(val, dict):
                     raw_subs = []
-                    for k in sorted(val.keys(), key=lambda x: int(x) if str(x).isdigit() else x):
+                    for k in sorted(val.keys(), key=lambda x: (int(x) if str(x).isdigit() else float('inf'), str(x))):
                         item = val[k]
                         if isinstance(item, str) and item.strip():
                             raw_subs.append(item.strip())
@@ -256,9 +352,53 @@ class BookSerializer(serializers.ModelSerializer):
                 else:
                     del data['subgenres']
 
+        # Handle multiple URLs in site_url (Only if the model has been updated)
+        if 'site_url' in data and hasattr(self.Meta.model, 'site_url'):
+            raw_urls = []
+            if hasattr(data, 'getlist'):
+                raw_urls_list = data.getlist('site_url')
+                if len(raw_urls_list) == 1 and isinstance(raw_urls_list[0], str) and ',' in raw_urls_list[0]:
+                    raw_urls = [u.strip() for u in raw_urls_list[0].split(',') if u.strip()]
+                else:
+                    raw_urls = [u.strip() for u in raw_urls_list if isinstance(u, str) and u.strip()]
+            else:
+                val = data.get('site_url')
+                if isinstance(val, str):
+                    raw_urls = [u.strip() for u in val.split(',') if u.strip()]
+                elif isinstance(val, list):
+                    raw_urls = [u.strip() for u in val if isinstance(u, str) and u.strip()]
+            
+            if raw_urls:
+                data['site_url'] = ",".join(raw_urls)
+        elif 'site_url' in data:
+            # Drop site_url from data if model isn't ready, to prevent Model.create() from crashing
+            if hasattr(data, '_mutable'):
+                mutable = data._mutable
+                data._mutable = True
+                data.pop('site_url', None)
+                data._mutable = mutable
+            else:
+                data.pop('site_url', None)
+
+        # Clear book_cover if it's not an actual file upload (string values cause validation error)
+        if 'book_cover' in data:
+            val = data.get('book_cover')
+            if val is None or isinstance(val, str):
+                if hasattr(data, 'pop'):
+                    data.pop('book_cover', None)
+                else:
+                    del data['book_cover']
+
+        # Clear empty strings for publish_date to prevent "Date has wrong format" error
+        if 'publish_date' in data and data.get('publish_date') == '':
+            if hasattr(data, 'pop'):
+                data.pop('publish_date', None)
+            else:
+                del data['publish_date']
+
         validated_data = super().to_internal_value(data)
         
-        # Flatten the list back to a string for the DB CharField
+        # Flatten the subgenres list back to a string for the DB CharField
         if 'subgenres' in validated_data and isinstance(validated_data['subgenres'], list):
             validated_data['subgenres'] = ",".join(validated_data['subgenres'])
             
@@ -266,15 +406,25 @@ class BookSerializer(serializers.ModelSerializer):
 
     def to_representation(self, instance):
         repr = super().to_representation(instance)
+        # Handle subgenres
         if instance.subgenres:
-            # If it's already a list (from validated_data), use it
             if isinstance(instance.subgenres, list):
                 repr['subgenres'] = instance.subgenres
-            # If it's a string (from DB), split it
             elif isinstance(instance.subgenres, str):
                 repr['subgenres'] = instance.subgenres.split(',')
         else:
             repr['subgenres'] = []
+            
+        # Handle site_url with safety check for model transitions
+        site_url_val = getattr(instance, 'site_url', None)
+        if site_url_val:
+            if isinstance(site_url_val, str):
+                repr['site_url'] = [u.strip() for u in site_url_val.split(',') if u.strip()]
+            else:
+                repr['site_url'] = site_url_val
+        else:
+            repr['site_url'] = []
+            
         return repr
 
 class NotificationSerializer(serializers.ModelSerializer):
@@ -320,6 +470,67 @@ class SwapRequestSerializer(serializers.ModelSerializer):
         model = SwapRequest
         fields = '__all__'
         read_only_fields = ['requester', 'created_at']
+        extra_kwargs = {
+            'message': {'required': False},
+            'site_url': {'required': False, 'allow_blank': True},
+        }
+        
+    def to_internal_value(self, data):
+        # Create a mutable copy if it's a QueryDict
+        if hasattr(data, 'copy'):
+            data = data.copy()
+            
+        # 1. Map 'placement' to 'preferred_placement' and 'max_partners' to 'max_partners_acknowledged'
+        if 'placement' in data:
+            val = data.get('placement', '').lower()
+            # Map 'mid' or 'middle' consistently
+            if val == 'mid' or val == 'middle':
+                data['preferred_placement'] = 'middle'
+            else:
+                data['preferred_placement'] = val
+            
+        if 'max_partners' in data:
+            data['max_partners_acknowledged'] = data.get('max_partners')
+
+        # 2. Clear empty strings for message to prevent validation issues
+        if 'message' in data and data.get('message') == '':
+            if hasattr(data, 'pop'):
+                data.pop('message', None)
+            else:
+                del data['message']
+
+        # 3. Handle site_url list/string mapping
+        if 'site_url' in data:
+            raw_urls = []
+            if hasattr(data, 'getlist'):
+                raw_urls_list = data.getlist('site_url')
+                if len(raw_urls_list) == 1 and isinstance(raw_urls_list[0], str) and ',' in raw_urls_list[0]:
+                    raw_urls = [u.strip() for u in raw_urls_list[0].split(',') if u.strip()]
+                else:
+                    raw_urls = [u.strip() for u in raw_urls_list if isinstance(u, str) and u.strip()]
+            else:
+                val = data.get('site_url')
+                if isinstance(val, str):
+                    raw_urls = [u.strip() for u in val.split(',') if u.strip()]
+                elif isinstance(val, list):
+                    raw_urls = [u.strip() for u in val if isinstance(u, str) and u.strip()]
+            
+            if raw_urls:
+                data['site_url'] = ",".join(raw_urls)
+            else:
+                if hasattr(data, 'pop'):
+                    data.pop('site_url', None)
+                else:
+                    del data['site_url']
+                    
+        return super().to_internal_value(data)
+
+    def to_representation(self, instance):
+        repr_data = super().to_representation(instance)
+        # Consistent with frontend payload
+        repr_data['placement'] = instance.preferred_placement
+        repr_data['max_partners'] = instance.max_partners_acknowledged
+        return repr_data
 
 
 
@@ -350,6 +561,19 @@ class SwapRequestSerializer(serializers.ModelSerializer):
                 indicators["reliability_match"] = diff <= 1.0
                 
         return indicators
+
+    def to_representation(self, instance):
+        repr = super().to_representation(instance)
+        # Handle site_url list representation
+        site_url_val = getattr(instance, 'site_url', None)
+        if site_url_val:
+            if isinstance(site_url_val, str):
+                repr['site_url'] = [u.strip() for u in site_url_val.split(',') if u.strip()]
+            else:
+                repr['site_url'] = site_url_val
+        else:
+            repr['site_url'] = []
+        return repr
 
 
 class SwapManagementSerializer(serializers.ModelSerializer):
@@ -470,30 +694,38 @@ class SwapManagementSerializer(serializers.ModelSerializer):
             # If a successful transaction exists, we should trust it
             return True
         
-        # 3. Third fallback: check for ANY completed transaction between these users for this amount
-        # This catches payments that weren't properly linked to the swap
-        try:
-            from decimal import Decimal
-            price_decimal = Decimal(str(obj.slot.price))
-            
-            # Find transactions between swap participants for the slot price
-            # Where sender is the requester (payer) and receiver is slot owner
-            unlinked_tx = PaymentTransaction.objects.filter(
-                sender=obj.requester,
-                receiver=obj.slot.user,
-                amount=price_decimal,
-                status='completed',
-                swap_request__isnull=True  # Not linked to any swap yet
-            ).first()
-            
-            if unlinked_tx:
-                # Auto-link this transaction to the swap for future queries
-                unlinked_tx.swap_request = obj
-                unlinked_tx.save()
+        # 3. Additional check: for direct payments that might not be linked properly,
+        # check if there's a completed direct_payment transaction between these users
+        # for a matching amount within a reasonable time window
+        from django.db.models import Q
+        from django.utils import timezone
+        from datetime import timedelta
+        from decimal import Decimal
+        
+        # Get the sender (requester) and receiver (slot owner)
+        sender = obj.requester
+        receiver = obj.slot.user
+        price = obj.slot.price or 0
+        
+        # Look for direct payment transactions between these users within 24h
+        # Use a small tolerance for amount comparison (0.01 difference allowed)
+        direct_tx = PaymentTransaction.objects.filter(
+            Q(sender=sender, receiver=receiver) | Q(sender=receiver, receiver=sender),
+            transaction_type='direct_payment',
+            status='completed',
+            created_at__gte=timezone.now() - timedelta(hours=24),
+        ).first()
+        
+        if direct_tx:
+            tx_amount = Decimal(str(direct_tx.amount))
+            expected_price = Decimal(str(price))
+            # Allow small tolerance for amount comparison
+            if abs(tx_amount - expected_price) <= Decimal('0.01'):
+                # Found a matching direct payment - link it to this swap for future
+                if not direct_tx.swap_request:
+                    direct_tx.swap_request = obj
+                    direct_tx.save(update_fields=['swap_request'])
                 return True
-                
-        except Exception:
-            pass  # Ignore any errors in this fallback
 
         return False
 
@@ -560,9 +792,17 @@ class SwapManagementSerializer(serializers.ModelSerializer):
         return None
 
     def get_audience_size(self, obj):
-        # Use the slot's audience_size (synced from MailerLite)
-        slot = obj.slot
-        return f"{slot.audience_size:,}+" if slot else "0"
+        # Use the partner's active subscriber count (synced from MailerLite)
+        partner = self.get_partner_user(obj)
+        from core.models import SubscriberVerification
+        try:
+            verification = SubscriberVerification.objects.get(user=partner)
+            size = verification.active_subscribers
+            return f"{size:,}+"
+        except SubscriberVerification.DoesNotExist:
+            # Fallback to the slot's audience_size if no verification record exists
+            slot = obj.slot
+            return f"{slot.audience_size:,}+" if slot else "0"
 
     def get_reliability_score(self, obj):
         partner = self.get_partner_user(obj)
@@ -730,8 +970,8 @@ class SwapHistoryDetailSerializer(serializers.ModelSerializer):
     # Status banner
     status_label = serializers.SerializerMethodField()
 
-    # Partner's social links
-    partner_links = serializers.SerializerMethodField()
+    # Custom site URLs for tracking
+    site_url = serializers.SerializerMethodField()
 
     # Promoting book info
     promoting_book = serializers.SerializerMethodField()
@@ -739,21 +979,33 @@ class SwapHistoryDetailSerializer(serializers.ModelSerializer):
     # Link-Level CTR analysis
     link_ctr_analysis = serializers.SerializerMethodField()
     
+    # NEW fields for the details modal
+    audience = serializers.SerializerMethodField()
+    reliability = serializers.SerializerMethodField()
+
     # Payment status
     payment_done = serializers.SerializerMethodField()
+    
+    # Override status to return completed when payment is done
+    status = serializers.SerializerMethodField()
+    
+    # Partner email
+    partner_email = serializers.SerializerMethodField()
 
     class Meta:
         model = SwapRequest
         fields = [
             'id', 'status',
-            'partner_name', 'partner_label', 'partner_genre', 'partner_profile_picture',
+            'partner_name', 'partner_label', 'partner_genre', 'partner_profile_picture', 'partner_email',
             'request_date', 'completed_date', 'status_label',
-            'partner_links',
+            'site_url',
             'promoting_book',
             'link_ctr_analysis',
             'payment_done',
             'message',
             'rejection_reason',
+            'audience',
+            'reliability'
         ]
 
     def _get_partner(self, obj):
@@ -788,12 +1040,19 @@ class SwapHistoryDetailSerializer(serializers.ModelSerializer):
             return profile.profile_picture.url
         return None
 
+    def get_partner_email(self, obj):
+        """Return the partner's email address"""
+        partner = self._get_partner(obj)
+        return partner.email if partner else None
+
     def get_request_date(self, obj):
         if obj.created_at:
             return obj.created_at.strftime("%d %b, %Y")
         return None
 
     def get_completed_date(self, obj):
+        eff_status = self.get_status(obj)
+        
         # For paid swaps, show payment completion date if swap is paid and completed
         if obj.slot:
             prom_type = str(obj.slot.promotion_type).lower() if obj.slot.promotion_type else ''
@@ -801,13 +1060,27 @@ class SwapHistoryDetailSerializer(serializers.ModelSerializer):
             is_paid = prom_type == 'paid' or price_val > 0
             
             if is_paid:
+                # Check SwapPayment record
                 payment = getattr(obj, 'payment', None)
                 if payment and payment.status == 'completed' and payment.paid_at:
                     return payment.paid_at.strftime("%d %b, %Y")
+                
+                # Check for linked PaymentTransaction
+                from core.models import PaymentTransaction
+                tx = PaymentTransaction.objects.filter(
+                    swap_request=obj, 
+                    status='completed'
+                ).first()
+                if tx and tx.completed_at:
+                    return tx.completed_at.strftime("%d %b, %Y")
         
         # For non-paid swaps or if payment not completed, show actual completion date
         if obj.completed_at:
             return obj.completed_at.strftime("%d %b, %Y")
+        elif eff_status in ['completed', 'verified'] and obj.created_at:
+            # Fallback for data that wasn't updated with completed_at or is effectively completed via payment
+            return obj.created_at.strftime("%d %b, %Y")
+            
         return None
 
     def get_status_label(self, obj):
@@ -822,8 +1095,12 @@ class SwapHistoryDetailSerializer(serializers.ModelSerializer):
                     return 'Swap Completed'
                 return 'Swap Scheduled'
         
-        # For non-paid swaps, check scheduled_date
-        if obj.status in ['confirmed', 'completed', 'scheduled']:
+        # For non-paid swaps, if status is already completed/verified, show it
+        if obj.status in ['completed', 'verified']:
+            return 'Swap Completed'
+            
+        # Check scheduled_date
+        if obj.status in ['confirmed', 'scheduled']:
             from django.utils import timezone
             if obj.scheduled_date and obj.scheduled_date <= timezone.now().date():
                 return 'Swap Completed'
@@ -840,6 +1117,23 @@ class SwapHistoryDetailSerializer(serializers.ModelSerializer):
         }
         return labels.get(obj.status, obj.get_status_display())
     
+    def get_status(self, obj):
+        """Return 'completed' if payment is done for paid swaps"""
+        # If already completed/verified, return as-is
+        if obj.status in ['completed', 'verified']:
+            return 'completed'
+        
+        # For paid swaps, check if payment is done
+        if obj.slot:
+            prom_type = str(obj.slot.promotion_type).lower() if obj.slot.promotion_type else ''
+            price_val = obj.slot.price or 0
+            is_paid = prom_type == 'paid' or price_val > 0
+            
+            if is_paid and self.get_payment_done(obj):
+                return 'completed'
+        
+        return obj.status
+    
     def get_payment_done(self, obj):
         # Check if payment is completed for paid swaps
         if not obj.slot:
@@ -852,23 +1146,84 @@ class SwapHistoryDetailSerializer(serializers.ModelSerializer):
         if not is_paid:
             return False
         
+        # 1. Check SwapPayment record
         payment = getattr(obj, 'payment', None)
         if payment and payment.status == 'completed':
             return True
         
+        # 2. Check for linked PaymentTransaction
+        from core.models import PaymentTransaction
+        from django.db.models import Q
+        from django.utils import timezone
+        from datetime import timedelta
+        from decimal import Decimal
+        
+        tx_exists = PaymentTransaction.objects.filter(
+            swap_request=obj, 
+            status='completed'
+        ).exists()
+        
+        if tx_exists:
+            return True
+        
+        # 3. Check for direct payment transactions between these users
+        sender = obj.requester
+        receiver = obj.slot.user
+        price = obj.slot.price or 0
+        
+        direct_tx = PaymentTransaction.objects.filter(
+            Q(sender=sender, receiver=receiver) | Q(sender=receiver, receiver=sender),
+            transaction_type='direct_payment',
+            status='completed',
+            created_at__gte=timezone.now() - timedelta(hours=24),
+        ).first()
+        
+        if direct_tx:
+            tx_amount = Decimal(str(direct_tx.amount))
+            expected_price = Decimal(str(price))
+            if abs(tx_amount - expected_price) <= Decimal('0.01'):
+                # Auto-link for future
+                if not direct_tx.swap_request:
+                    direct_tx.swap_request = obj
+                    direct_tx.save(update_fields=['swap_request'])
+                return True
+        
         return False
 
-    def get_partner_links(self, obj):
+    def get_audience(self, obj):
+        """Returns the partner's verified subscriber count"""
+        partner = self._get_partner(obj)
+        from core.models import SubscriberVerification
+        try:
+            verification = SubscriberVerification.objects.get(user=partner)
+            return verification.active_subscribers
+        except SubscriberVerification.DoesNotExist:
+            return 0
+
+    def get_reliability(self, obj):
+        """Returns the partner's reputation score"""
         partner = self._get_partner(obj)
         profile = partner.profiles.first()
-        if not profile:
-            return {}
-        return {
-            "website": profile.website or None,
-            "facebook": profile.facebook_url or None,
-            "instagram": profile.instagram_url or None,
-            "twitter": profile.tiktok_url or None,  # Using tiktok field for now
-        }
+        return profile.reputation_score if profile else 0.0
+
+    def get_site_url(self, obj):
+        # 🎯 Use real URL provided by the author:
+        # 1. Custom URL for this swap specifically
+        if obj.site_url:
+            return [obj.site_url]
+            
+        # 2. Fallback to Book's site_url(s)
+        if obj.book:
+            if obj.book.site_url:
+                urls = [u.strip() for u in obj.book.site_url.split(',') if u.strip()]
+                if urls:
+                    return urls
+            
+            # 3. Final fallback to Amazon URL
+            if hasattr(obj.book, 'amazon_url') and obj.book.amazon_url:
+                return [obj.book.amazon_url]
+        
+        return []
 
     def get_promoting_book(self, obj):
         # 🎯 Intelligent Context Switching for Book History:
@@ -958,8 +1313,8 @@ class TrackMySwapSerializer(serializers.ModelSerializer):
     # Status
     status_label = serializers.SerializerMethodField()
 
-    # Partner Links
-    partner_links = serializers.SerializerMethodField()
+    # Custom site URLs for tracking
+    site_url = serializers.SerializerMethodField()
     
     # Link Level CTR
     link_level_ctr = serializers.SerializerMethodField()
@@ -972,7 +1327,7 @@ class TrackMySwapSerializer(serializers.ModelSerializer):
             'promoting_book',
             'deadline', 'request_date', 'countdown_label',
             'status_label',
-            'partner_links',
+            'site_url',
             'link_level_ctr',
             'message',
         ]
@@ -1066,17 +1421,24 @@ class TrackMySwapSerializer(serializers.ModelSerializer):
         }
         return labels.get(obj.status, obj.get_status_display())
 
-    def get_partner_links(self, obj):
-        partner = self._get_partner(obj)
-        profile = partner.profiles.first()
-        if not profile:
-            return {}
-        return {
-            "website": profile.website or None,
-            "facebook": profile.facebook_url or None,
-            "instagram": profile.instagram_url or None,
-            "twitter": profile.tiktok_url or None,
-        }
+    def get_site_url(self, obj):
+        # 🎯 Use real URL provided by the author:
+        # 1. Custom URL for this swap specifically
+        if obj.site_url:
+            return [obj.site_url]
+            
+        # 2. Fallback to Book's site_url(s)
+        if obj.book:
+            if obj.book.site_url:
+                urls = [u.strip() for u in obj.book.site_url.split(',') if u.strip()]
+                if urls:
+                    return urls
+            
+            # 3. Final fallback to Amazon URL
+            if hasattr(obj.book, 'amazon_url') and obj.book.amazon_url:
+                return [obj.book.amazon_url]
+        
+        return []
     
     def get_link_level_ctr(self, obj):
         """Returns link level CTR data for this swap"""
@@ -1103,8 +1465,17 @@ class TrackMySwapSerializer(serializers.ModelSerializer):
         
         # If no link clicks exist, add placeholder with tracking
         if not links and obj.book:
-            # Add tracking parameter to book URL
-            book_url = getattr(obj.book, 'amazon_url', '#') or "#"
+            # Add tracking parameter to the first available site URL
+            book_url = "#"
+            site_url_val = getattr(obj.book, 'site_url', None)
+            if site_url_val:
+                urls = [u.strip() for u in site_url_val.split(',') if u.strip()]
+                if urls:
+                    book_url = urls[0]
+            else:
+                # Fallback for older model versions during transition
+                book_url = getattr(obj.book, 'amazon_url', '#') or "#"
+
             if '?' in book_url:
                 tracked_url = f"{book_url}&swap_track={obj.id}"
             else:
@@ -1654,32 +2025,55 @@ class PaymentTransactionSerializer(serializers.ModelSerializer):
         read_only_fields = ['sender', 'receiver', 'stripe_payment_intent_id', 'stripe_transfer_id']
 
     def get_amount(self, obj):
-        # Only show negative for withdrawals
-        if obj.transaction_type == 'withdrawal':
+        request = self.context.get('request')
+        user = request.user if request else None
+        
+        # If I am the sender, it's a deduction (negative)
+        if user and obj.sender_id == user.id and obj.receiver_id != user.id:
             return f"-{obj.amount}"
             
-        # Everything else (direct payments, etc.) shows as positive
-        return str(obj.amount)
+        # If I am the receiver (and not also sender), it's an addition (positive)
+        return f"+{obj.amount}"
 
     def get_amount_color(self, obj):
-        # Withdrawals are red
-        if obj.transaction_type == 'withdrawal':
+        request = self.context.get('request')
+        user = request.user if request else None
+        
+        # Money going OUT of my wallet is red
+        if user and obj.sender_id == user.id and obj.receiver_id != user.id:
             return 'red'
-        # Everything else can be green
+            
+        # Money coming INTO my wallet is green
         return 'green'
 
     def get_description(self, obj):
-        desc = obj.description
-        # If the description contains a Swap ID, we improve it by showing the receiver's name instead of just the number
-        # Example: "Internal payment for Swap ID: 119" -> "Internal payment for jkrowling"
-        if obj.receiver and "Swap ID:" in desc:
-            try:
-                # Part before "Swap ID:"
-                base_desc = desc.split("Swap ID:")[0].strip()
-                return f"{base_desc} for {obj.receiver.username}"
-            except:
-                return desc
-        return desc
+        request = self.context.get('request')
+        user = request.user if request else None
+        
+        # 1. Logic for RECIPIENT viewing their history
+        if user and obj.receiver_id == user.id:
+            # If I funded my own wallet
+            if obj.sender_id == user.id:
+                return "Wallet funding success"
+            # If system paid me
+            if not obj.sender:
+                return "System credit / Bonus"
+            # If another user paid me
+            return f"Payment received from {obj.sender.username}"
+            
+        # 2. Logic for SENDER viewing their history
+        if user and obj.sender_id == user.id:
+            # Withdrawal to bank
+            if obj.transaction_type == 'withdrawal':
+                return "Withdrawal to bank account"
+            # Payment to another user
+            if obj.receiver_id != user.id:
+                return f"Payment sent to {obj.receiver.username}"
+            # Internal funding
+            return "Wallet funding"
+            
+        # Fallback to the saved description
+        return obj.description
     
     def get_sender_profile(self, obj):
         if obj.sender:

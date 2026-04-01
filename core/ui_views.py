@@ -44,8 +44,39 @@ class SlotExploreView(ListAPIView):
     search_fields = ['user__profiles__name', 'preferred_genre']
 
     def get_queryset(self):
-        # Exclude the logged-in user's own slots from the explore feed
-        return NewsletterSlot.objects.exclude(user=self.request.user).order_by('-created_at')
+        user = self.request.user
+        
+        # Identify "Friends" as authors with whom a swap has been confirmed, scheduled, or completed
+        past_partners = SwapRequest.objects.filter(
+            Q(requester=user) | Q(slot__user=user),
+            status__in=['confirmed', 'scheduled', 'sending', 'completed', 'verified']
+        ).values_list('requester', 'slot__user')
+        
+        # Flatten and unique the user ID list
+        partner_ids = set()
+        for p1, p2 in past_partners:
+            partner_ids.add(p1)
+            partner_ids.add(p2)
+        
+        if user.id in partner_ids:
+            partner_ids.remove(user.id)
+
+        from django.db.models import Count, F
+        
+        # Show public slots OR friend_only slots from past partners
+        # ALSO: Filter out slots that have already reached their max_partners limit
+        return NewsletterSlot.objects.annotate(
+            active_partners_count=Count(
+                'swap_requests',
+                filter=Q(swap_requests__status__in=['confirmed', 'verified', 'completed', 'sending', 'scheduled'])
+            )
+        ).filter(
+            Q(visibility='public') | 
+            Q(visibility='friend_only', user_id__in=list(partner_ids))
+        ).filter(
+            active_partners_count__lt=F('max_partners'),
+            status='available'
+        ).exclude(user=user).order_by('-created_at')
     
     def list(self, request, *args, **kwargs):
         # Get the paginated response first
@@ -95,3 +126,45 @@ class SwapArrangementView(RetrieveAPIView):
         return SwapRequest.objects.filter(
             Q(requester=self.request.user) | Q(slot__user=self.request.user)
         )
+
+
+class SharedSlotView(RetrieveAPIView):
+    """
+    Endpoint: /api/slots/shared/<token>/
+    Allows access to a private/hidden slot via its unique share_token.
+    Only someone with the exact token can view the slot details.
+    """
+    serializer_class = SlotDetailsSerializer
+    permission_classes = [IsAuthenticated]
+    lookup_field = 'share_token'
+    lookup_url_kwarg = 'token'
+
+    def get_queryset(self):
+        return NewsletterSlot.objects.all()
+
+    def retrieve(self, request, *args, **kwargs):
+        try:
+            slot = NewsletterSlot.objects.get(share_token=kwargs['token'])
+        except NewsletterSlot.DoesNotExist:
+            return Response(
+                {"detail": "Invalid or expired share link."},
+                status=404
+            )
+
+        serializer = self.get_serializer(slot)
+        response_data = dict(serializer.data)
+
+        # Add share_url for reference
+        response_data['share_url'] = f"http://72.61.251.114/authorswap/api/slots/shared/{slot.share_token}/"
+
+        # Add user's books so they can pick one to send a request
+        from core.models import Book
+        from core.serializers import BookSerializer
+        user_books = Book.objects.filter(user=request.user)
+        response_data['my_books'] = list(BookSerializer(user_books, many=True, context={'request': request}).data)
+
+        # Check if user already sent a request for this slot
+        sent_request = SwapRequest.objects.filter(slot=slot, requester=request.user).exists()
+        response_data['sent_request'] = sent_request
+
+        return Response(response_data)

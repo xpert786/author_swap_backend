@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from django.utils import timezone
 from .models import NewsletterSlot, SwapRequest, Book, Profile
 
 class AuthorProfileSerializer(serializers.ModelSerializer):
@@ -11,7 +12,7 @@ class AuthorProfileSerializer(serializers.ModelSerializer):
         model = Profile
         fields = [
             'id', 'user_id', 'name', 'profile_picture', 'swaps_completed', 'reputation_score', 'rating',
-            'primary_genre', 'send_reliability_percent'
+            'primary_genre', 'send_reliability_percent', 'avg_open_rate', 'avg_click_rate'
         ]
 
     def get_swaps_completed(self, obj):
@@ -23,11 +24,14 @@ class SlotExploreSerializer(serializers.ModelSerializer):
     current_partners_count = serializers.SerializerMethodField()
     audience_size = serializers.SerializerMethodField()  # Override to use active subscribers
 
+    formatted_send_date_time = serializers.SerializerMethodField()
+    share_url = serializers.SerializerMethodField()
+    
     class Meta:
         model = NewsletterSlot
         fields = [
-            'id', 'send_date', 'send_time', 'audience_size', 'visibility', 
-            'status', 'promotion_type', 'price', 'preferred_genre', 
+            'id', 'send_date', 'send_time', 'formatted_send_date_time', 'share_url', 'audience_size', 'visibility', 
+            'status', 'promotion_type', 'price', 'preferred_genre', 'placement_style', 
             'current_partners_count', 'max_partners', 'author'
         ]
 
@@ -42,6 +46,25 @@ class SlotExploreSerializer(serializers.ModelSerializer):
 
     def get_current_partners_count(self, obj):
         return obj.swap_requests.filter(status__in=['confirmed', 'verified', 'scheduled', 'completed']).count()
+
+    def get_formatted_send_date_time(self, obj):
+        """Returns formatted date and time like 'Wednesday, May 15 at 10:00 AM EST'"""
+        if not obj.send_date:
+            return None
+        
+        # Format the date: Wednesday, May 15
+        date_str = obj.send_date.strftime('%A, %B %d')
+        
+        if obj.send_time:
+            # Format the time: 10:00 AM
+            time_str = obj.send_time.strftime('%I:%M %p').lstrip('0')
+            return f"{date_str} at {time_str} EST"
+        
+        # Fallback if no time is specified
+        return f"{date_str} (Flexible)"
+
+    def get_share_url(self, obj):
+        return f"http://72.61.251.114/authorswap-frontend/slot-detail/{obj.id}/"
 
 class SlotPartnerSerializer(serializers.ModelSerializer):
     """Used to serialize SwapRequest instances as partners inside a Slot"""
@@ -88,20 +111,48 @@ class SlotPartnerSerializer(serializers.ModelSerializer):
         return obj.book.title if obj.book else None
 
     def get_partner_sends_date(self, obj):
-        return obj.offered_slot.send_date if obj.offered_slot else None
+        """Get partner's (requester's) slot send date"""
+        if obj.offered_slot:
+            return obj.offered_slot.send_date
+        # Fallback: get partner's most recent or upcoming slot
+        from core.models import NewsletterSlot
+        # Try to get any slot from partner (upcoming first, then any)
+        partner_slot = NewsletterSlot.objects.filter(
+            user=obj.requester
+        ).order_by('send_date').first()
+        return partner_slot.send_date if partner_slot else None
 
     def get_partner_sends_time(self, obj):
-        return obj.offered_slot.send_time if obj.offered_slot else None
+        """Get partner's (requester's) slot send time"""
+        if obj.offered_slot:
+            return obj.offered_slot.send_time
+        # Fallback: get partner's most recent or upcoming slot
+        from core.models import NewsletterSlot
+        partner_slot = NewsletterSlot.objects.filter(
+            user=obj.requester
+        ).order_by('send_date').first()
+        return partner_slot.send_time if partner_slot else None
 
     def get_partner_sends_book(self, obj):
         return obj.requested_book.title if obj.requested_book else None
 
-    def get_partner_audience_size(self, obj):
-        """Return active subscribers count from partner's offered slot"""
-        from core.models import SubscriberVerification
+    def _get_partner_slot(self, obj):
+        """Helper method to get partner's slot (either offered_slot or their next slot)"""
         if obj.offered_slot:
+            return obj.offered_slot
+        # Fallback: get partner's slot (any status, any date)
+        from core.models import NewsletterSlot
+        return NewsletterSlot.objects.filter(
+            user=obj.requester
+        ).order_by('send_date').first()
+
+    def get_partner_audience_size(self, obj):
+        """Return active subscribers count from partner's slot"""
+        from core.models import SubscriberVerification
+        partner_slot = self._get_partner_slot(obj)
+        if partner_slot:
             try:
-                verification = SubscriberVerification.objects.get(user=obj.offered_slot.user)
+                verification = SubscriberVerification.objects.get(user=partner_slot.user)
                 return verification.active_subscribers
             except SubscriberVerification.DoesNotExist:
                 return 0
@@ -122,31 +173,74 @@ class SlotPartnerSerializer(serializers.ModelSerializer):
 
     def get_partner_sends_date_formatted(self, obj):
         """Returns formatted date like 'Friday, May 17'"""
-        if obj.offered_slot and obj.offered_slot.send_date:
-            return obj.offered_slot.send_date.strftime('%A, %B %d')
+        partner_slot = self._get_partner_slot(obj)
+        if partner_slot and partner_slot.send_date:
+            return partner_slot.send_date.strftime('%A, %B %d')
         return None
 
     def get_partner_sends_time_formatted(self, obj):
         """Returns formatted time like '02:00 PM'"""
-        if obj.offered_slot and obj.offered_slot.send_time:
-            return obj.offered_slot.send_time.strftime('%I:%M %p').lstrip('0')
+        partner_slot = self._get_partner_slot(obj)
+        if partner_slot and partner_slot.send_time:
+            return partner_slot.send_time.strftime('%I:%M %p').lstrip('0')
         return None
 
 class AuthorDetailedProfileSerializer(serializers.ModelSerializer):
     """Extended author profile with analytics and reputation for details modal"""
     swaps_completed = serializers.SerializerMethodField()
     rating = serializers.FloatField(source='reputation_score', read_only=True)
+    
+    # User-related fields
+    user = serializers.IntegerField(source='user.id', read_only=True)
+    username = serializers.CharField(source='user.username', read_only=True)
+    email = serializers.CharField(source='user.email', read_only=True)
+    
+    # Social URLs
+    instagram_url = serializers.CharField(read_only=True)
+    tiktok_url = serializers.CharField(read_only=True)
+    facebook_url = serializers.CharField(read_only=True)
+    website = serializers.CharField(read_only=True)
+    
+    # Location and pen name
+    pen_name = serializers.CharField(read_only=True)
+    location = serializers.CharField(read_only=True)
+    
+    # Advanced reputation fields
+    is_webhook_verified = serializers.BooleanField(read_only=True)
+    platform_ranking_position = serializers.IntegerField(read_only=True)
+    platform_ranking_percentile = serializers.IntegerField(read_only=True)
+    confirmed_sends_success_rate = serializers.FloatField(read_only=True)
+    timeliness_success_rate = serializers.FloatField(read_only=True)
+    missed_sends_count = serializers.IntegerField(read_only=True)
+    avg_response_time_hours = serializers.FloatField(read_only=True)
+    
+    # Timestamps and settings
+    created_at = serializers.DateTimeField(read_only=True)
+    auto_approve_friends = serializers.BooleanField(read_only=True)
+    auto_approve_min_reputation = serializers.FloatField(read_only=True)
+    
+    # Friends - return list of friend IDs
+    friends = serializers.SerializerMethodField()
 
     class Meta:
         model = Profile
         fields = [
-            'id', 'name', 'profile_picture', 'swaps_completed', 'reputation_score', 'rating',
+            'id', 'user', 'username', 'email', 'name', 'pen_name', 'profile_picture', 'location',
+            'primary_genre', 'bio', 'instagram_url', 'tiktok_url', 'facebook_url', 'website',
+            'swaps_completed', 'reputation_score', 'rating',
             'avg_open_rate', 'avg_click_rate', 'monthly_growth', 'send_reliability_percent',
-            'confirmed_sends_score', 'timeliness_score', 'missed_sends_penalty', 'communication_score'
+            'confirmed_sends_score', 'timeliness_score', 'missed_sends_penalty', 'communication_score',
+            'is_webhook_verified', 'platform_ranking_position', 'platform_ranking_percentile',
+            'confirmed_sends_success_rate', 'timeliness_success_rate', 'missed_sends_count',
+            'avg_response_time_hours', 'created_at', 'auto_approve_friends', 'auto_approve_min_reputation',
+            'friends'
         ]
 
     def get_swaps_completed(self, obj):
         return obj.swaps_completed
+        
+    def get_friends(self, obj):
+        return list(obj.friends.values_list('id', flat=True))
 
 class SlotDetailsSerializer(serializers.ModelSerializer):
     """Serializer for Figma Screen 1 - Slot Details Modal"""
@@ -155,11 +249,14 @@ class SlotDetailsSerializer(serializers.ModelSerializer):
     swap_partners = serializers.SerializerMethodField()
     audience_size = serializers.SerializerMethodField()  # Override to use active subscribers
     
+    formatted_send_date_time = serializers.SerializerMethodField()
+    share_url = serializers.SerializerMethodField()
+    
     class Meta:
         model = NewsletterSlot
         fields = [
-            'id', 'author', 'send_date', 'send_time', 'audience_size', 'visibility', 
-            'status', 'preferred_genre', 'current_partners_count', 'max_partners', 'swap_partners'
+            'id', 'author', 'send_date', 'send_time', 'formatted_send_date_time', 'share_url', 'audience_size', 'visibility', 
+            'status', 'preferred_genre', 'placement_style', 'current_partners_count', 'max_partners', 'swap_partners'
         ]
 
     def get_audience_size(self, obj):
@@ -177,6 +274,25 @@ class SlotDetailsSerializer(serializers.ModelSerializer):
     def get_swap_partners(self, obj):
         requests = obj.swap_requests.filter(status__in=['confirmed', 'verified', 'completed', 'sending', 'scheduled'])
         return SlotPartnerSerializer(requests, many=True, context=self.context).data
+
+    def get_share_url(self, obj):
+        return f"http://72.61.251.114/authorswap-frontend/slot-detail/{obj.id}/"
+
+    def get_formatted_send_date_time(self, obj):
+        """Returns formatted date and time like 'Wednesday, May 15 at 10:00 AM EST'"""
+        if not obj.send_date:
+            return None
+        
+        # Format the date: Wednesday, May 15
+        date_str = obj.send_date.strftime('%A, %B %d')
+        
+        if obj.send_time:
+            # Format the time: 10:00 AM
+            time_str = obj.send_time.strftime('%I:%M %p').lstrip('0')
+            return f"{date_str} at {time_str} EST"
+        
+        # Fallback if no time is specified
+        return f"{date_str} (Flexible)"
 
 class SwapArrangementSerializer(serializers.ModelSerializer):
     """Serializer for Figma Screen 2 - Swap Arrangement Modal"""

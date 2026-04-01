@@ -62,3 +62,4 @@ htmlcov/
 */migrations/*.log
 # but keep the __init__.py files
 !*/migrations/__init__.py
+client_secret_*.json

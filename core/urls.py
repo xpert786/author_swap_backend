@@ -1,7 +1,7 @@
 from django.urls import path
 from .views import (
     CreateNewsletterSlotView, NewsletterSlotDetailView, GenreSubgenreMappingView, 
-    AddBookView, BookDetailView, ProfileDetailView, BookManagementStatsView, 
+    AddBookView, BookDetailView, ProfileDetailView, PublicProfileDetailView, BookManagementStatsView, 
     NewsletterStatsView, NotificationListView, TestWebSocketNotificationView, 
     NewsletterSlotExportView, SwapPartnerDiscoveryView, SwapRequestListView, SwapRequestDetailView,
     MyPotentialBooksView, SwapPartnerDetailView, RecentSwapHistoryView, NotificationUnreadCountView,
@@ -22,7 +22,7 @@ from .views import (
 from .calendar_views import (
     GoogleCalendarExportView, OutlookCalendarExportView, ICSExportView, CalendarExportOptionsView
 )
-from .ui_views import SlotExploreView, SlotDetailsView, SwapArrangementView
+from .ui_views import SlotExploreView, SlotDetailsView, SwapArrangementView, SharedSlotView
 
 
 
@@ -34,6 +34,7 @@ urlpatterns = [
     path('add-book/', AddBookView.as_view(), name='add-book'),
     path('book/<int:pk>/', BookDetailView.as_view(), name='book-detail'),
     path('profile/', ProfileDetailView.as_view(), name='profile-detail'),
+    path('profiles/<int:user_id>/', PublicProfileDetailView.as_view(), name='public-profile-detail'),
     path('book-management-stats/', BookManagementStatsView.as_view(), name='book-management-stats'),
     path('newsletter-dashboard/', NewsletterStatsView.as_view(), name='newsletter-dashboard'),
     path('newsletter-stats/', NewsletterStatsView.as_view(), name='newsletter-stats'),
@@ -60,6 +61,7 @@ urlpatterns = [
     path('slots/<int:slot_id>/request/', SwapRequestListView.as_view(), name='slot-request-create'),
     path('slots/<int:slot_id>/request-placement/', RequestSwapPlacementView.as_view(), name='request-swap-placement'),
     path('swaps/<int:pk>/arrangement/', SwapArrangementView.as_view(), name='swaps-arrangement'),
+    path('slots/shared/<uuid:token>/', SharedSlotView.as_view(), name='shared-slot'),
     
     # Reputation & Verification
     path('author-reputation/', AuthorReputationView.as_view(), name='author-reputation'),

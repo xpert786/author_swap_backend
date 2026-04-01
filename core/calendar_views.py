@@ -134,6 +134,7 @@ class ICSExportView(APIView):
 
     def get(self, request):
         user = request.user
+        format_type = request.query_params.get('format', 'ics')
         
         # Get user's newsletter slots
         slots = NewsletterSlot.objects.filter(user=user).order_by('send_date')
@@ -141,11 +142,45 @@ class ICSExportView(APIView):
         if not slots.exists():
             return JsonResponse({'error': 'No newsletter slots found'}, status=404)
         
+        if format_type == 'json':
+            events = []
+            for slot in slots:
+                genre_display = slot.get_preferred_genre_display().replace('\u2019', "'")
+                event = {
+                    'id': slot.id,
+                    'uid': f"{slot.id}@authorswap.com",
+                    'summary': f'Newsletter: {genre_display}',
+                    'description': f'Newsletter slot for {genre_display}',
+                    'status': 'CONFIRMED',
+                    'send_date': slot.send_date.strftime('%Y-%m-%d'),
+                    'send_time': slot.send_time.strftime('%H:%M:%S') if slot.send_time else None,
+                }
+                
+                if slot.send_time:
+                    start_dt = datetime.combine(slot.send_date, slot.send_time)
+                    end_dt = start_dt + timedelta(hours=1)
+                    event['start'] = start_dt.isoformat()
+                    event['end'] = end_dt.isoformat()
+                else:
+                    event['start'] = slot.send_date.isoformat()
+                    event['end'] = (slot.send_date + timedelta(days=1)).isoformat()
+                    event['all_day'] = True
+                
+                events.append(event)
+                
+            return JsonResponse({
+                'success': True,
+                'user': user.username,
+                'download_url': f"{request.build_absolute_uri(request.path)}",
+                'events_count': len(events),
+                'events': events
+            })
+
         # Generate ICS content
         ics_content = self.generate_ics_content(slots)
         
         # Create HTTP response with ICS file
-        response = HttpResponse(ics_content, content_type='text/calendar')
+        response = HttpResponse(ics_content, content_type='text/calendar; charset=utf-8')
         response['Content-Disposition'] = f'attachment; filename="newsletter_schedule_{user.username}.ics"'
         
         return response
@@ -164,22 +199,33 @@ class ICSExportView(APIView):
         
         for slot in slots:
             if slot.send_date:
-                # Convert to UTC for ICS format
-                start_time = slot.send_date.strftime('%Y%m%dT%H%M%SZ')
-                end_time = (slot.send_date + timedelta(hours=1)).strftime('%Y%m%dT%H%M%SZ')
-                
                 # Create unique ID for event
                 event_id = f"{slot.id}@authorswap.com"
                 
+                # Sanitize curly quotes to ASCII for maximum compatibility
+                genre_display = slot.get_preferred_genre_display().replace('\u2019', "'")
+
+                # Combine send_date + send_time into a proper datetime for correct duration
+                if slot.send_time:
+                    start_dt = datetime.combine(slot.send_date, slot.send_time)
+                    end_dt = start_dt + timedelta(hours=1)
+                    start_str = f'DTSTART:{start_dt.strftime("%Y%m%dT%H%M%SZ")}'
+                    end_str = f'DTEND:{end_dt.strftime("%Y%m%dT%H%M%SZ")}'
+                else:
+                    # All-day event format (no time component)
+                    next_day = slot.send_date + timedelta(days=1)
+                    start_str = f'DTSTART;VALUE=DATE:{slot.send_date.strftime("%Y%m%d")}'
+                    end_str = f'DTEND;VALUE=DATE:{next_day.strftime("%Y%m%d")}'
+
                 # Add event to ICS
                 ics_lines.extend([
                     'BEGIN:VEVENT',
                     f'UID:{event_id}',
                     f'DTSTAMP:{now}',
-                    f'DTSTART:{start_time}',
-                    f'DTEND:{end_time}',
-                    f'SUMMARY:Newsletter: {slot.get_preferred_genre_display()}',
-                    f'DESCRIPTION:Newsletter slot for {slot.get_preferred_genre_display()}',
+                    start_str,
+                    end_str,
+                    f'SUMMARY:Newsletter: {genre_display}',
+                    f'DESCRIPTION:Newsletter slot for {genre_display}',
                     'STATUS:CONFIRMED',
                     'END:VEVENT'
                 ])

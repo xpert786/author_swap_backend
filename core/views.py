@@ -246,6 +246,46 @@ class ProfileDetailView(RetrieveUpdateDestroyAPIView):
     def get_queryset(self):
         return Profile.objects.filter(user=self.request.user)
 
+    def get(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        if not queryset.exists():
+            from rest_framework.exceptions import NotFound
+            raise NotFound({
+                "detail": "Profile not found. Please create your profile first.",
+                "has_profile": False
+            })
+        profile = queryset.first()
+        serializer = self.get_serializer(profile, context={'request': request})
+        return Response(serializer.data)
+
+    def get_serializer(self, *args, **kwargs):
+        if 'data' in kwargs:
+            data = kwargs['data']
+            # Make data mutable
+            mutable_data = data.copy() if hasattr(data, 'copy') else data
+            
+            # Extract and join pen names
+            if hasattr(data, 'getlist'):
+                pen_names = data.getlist('pen_name')
+            else:
+                pen_names = data.get('pen_name')
+                
+            if isinstance(pen_names, list) and len(pen_names) > 0:
+                mutable_data['pen_name'] = ','.join([str(p) for p in pen_names if p])
+                
+            # Extract and join genres
+            if hasattr(data, 'getlist'):
+                genres = data.getlist('primary_genre')
+            else:
+                genres = data.get('primary_genre')
+                
+            if isinstance(genres, list) and len(genres) > 0:
+                mutable_data['primary_genre'] = ','.join([str(g) for g in genres if g])
+                
+            kwargs['data'] = mutable_data
+            
+        return super().get_serializer(*args, **kwargs)
+
     def post(self, request, *args, **kwargs):
         if Profile.objects.filter(user=request.user).exists():
             return Response(
@@ -278,6 +318,24 @@ class ProfileDetailView(RetrieveUpdateDestroyAPIView):
         instance = self.get_object()
         instance.delete()
         return Response({"message": "Profile deleted successfully."}, status=status.HTTP_204_NO_CONTENT)
+
+class PublicProfileDetailView(RetrieveAPIView):
+    """
+    View another author's profile by their user_id.
+    Includes the 'available_slots' field for selecting specific dates.
+    """
+    queryset = Profile.objects.all()
+    serializer_class = ProfileSerializer
+    permission_classes = [IsAuthenticated]
+    lookup_field = 'user_id'
+    
+    def get_object(self):
+        user_id = self.kwargs.get('user_id')
+        try:
+            return Profile.objects.select_related('user').get(user_id=user_id)
+        except Profile.DoesNotExist:
+            from rest_framework.exceptions import NotFound
+            raise NotFound({"detail": "Author profile not found."})
 
 class BookManagementStatsView(APIView):
     permission_classes = [IsAuthenticated]
@@ -337,9 +395,6 @@ class NewsletterStatsView(APIView):
             "confirmed_swaps": SwapRequest.objects.filter(
                 slot__in=all_slots, status__in=confirmed_statuses
             ).count(),
-            "verified_sent": SwapRequest.objects.filter(
-                slot__in=all_slots, status__in=verified_statuses
-            ).count()
         }
 
         # --- 2. CALENDAR DATA (filtered) ---
@@ -531,12 +586,12 @@ class NewsletterSlotExportView(APIView):
                 f"DTSTAMP:{datetime.now().strftime('%Y%m%dT%H%M%SZ')}",
                 f"DTSTART:{start_dt.strftime('%Y%m%dT%H%M%SZ')}",
                 f"DTEND:{end_dt.strftime('%Y%m%dT%H%M%SZ')}",
-                f"SUMMARY:{title}",
-                f"DESCRIPTION:{description.replace('\\n', '\\\\n')}",
+                f"SUMMARY:{title.replace('’', "'")}",
+                f"DESCRIPTION:{description.replace('’', "'").replace('\\n', '\\\\n')}",
                 "END:VEVENT",
                 "END:VCALENDAR"
             ]
-            response = HttpResponse("\n".join(ics_content), content_type='text/calendar')
+            response = HttpResponse("\n".join(ics_content), content_type='text/calendar; charset=utf-8')
             response['Content-Disposition'] = f'attachment; filename="newsletter_slot_{slot.id}.ics"'
             return response
 
@@ -572,7 +627,7 @@ class NewsletterSlotFilter(FilterSet):
 
     class Meta:
         model = NewsletterSlot
-        fields = ['genre', 'min_audience', 'max_audience', 'min_reputation', 'promotion', 'status', 'start_date', 'end_date']
+        fields = ['genre', 'min_audience', 'max_audience', 'min_reputation', 'promotion', 'status', 'start_date', 'end_date', 'placement_style']
 
 class SwapPartnerDiscoveryView(ListCreateAPIView):
     """
@@ -584,10 +639,37 @@ class SwapPartnerDiscoveryView(ListCreateAPIView):
     filterset_class = NewsletterSlotFilter
 
     def get_queryset(self):
-        return NewsletterSlot.objects.filter(
-            visibility='public', 
+        user = self.request.user
+        
+        # Identify "Friends" as authors with whom a swap has been confirmed, scheduled, or completed
+        past_partners = SwapRequest.objects.filter(
+            Q(requester=user) | Q(slot__user=user),
+            status__in=['confirmed', 'scheduled', 'sending', 'completed', 'verified']
+        ).values_list('requester', 'slot__user')
+        
+        partner_ids = set()
+        for p1, p2 in past_partners:
+            partner_ids.add(p1)
+            partner_ids.add(p2)
+        from django.db.models import Count, F
+        
+        if user.id in partner_ids:
+            partner_ids.remove(user.id)
+
+        # Filter for Public OR Friend Only (if user is a past partner)
+        # AND Filter for slots that aren't already full
+        return NewsletterSlot.objects.annotate(
+            active_partners_count=Count(
+                'swap_requests',
+                filter=Q(swap_requests__status__in=['confirmed', 'verified', 'completed', 'sending', 'scheduled'])
+            )
+        ).filter(
+            Q(visibility='public') | 
+            Q(visibility='friend_only', user_id__in=list(partner_ids))
+        ).filter(
+            active_partners_count__lt=F('max_partners'),
             status='available'
-        ).exclude(user=self.request.user).order_by('-created_at')
+        ).exclude(user=user).order_by('-created_at')
 
 
 class SwapRequestListView(APIView):
@@ -659,15 +741,22 @@ class SwapRequestListView(APIView):
             if SwapRequest.objects.filter(slot=slot, requester=request.user).exists():
                 return Response({"detail": "You have already sent a request for this slot."}, status=status.HTTP_400_BAD_REQUEST)
 
-            # Link validation (Resilient for mock/test links)
-            if book:
-                links = [book.amazon_url, book.apple_url, book.kobo_url, book.barnes_noble_url]
-                for link in links:
+            # Link validation (Resilient for mock/test links or model transition)
+            site_url = getattr(book, 'site_url', None)
+            if book and site_url:
+                links = [u.strip() for u in site_url.split(',') if u.strip()]
+            elif book:
+                # Fallback to old URL fields during transition
+                links = [getattr(book, f, None) for f in ['amazon_url', 'apple_url', 'kobo_url', 'barnes_noble_url']]
+            else:
+                links = []
+
+            for link in links:
                     if link and 'test' not in link and 'localhost' not in link: # Skip check for test/local links
                         try:
-                            r = requests.head(link, timeout=3, allow_redirects=True)
                             # We still check for hard 404s on real links, but won't block the whole request
                             # if it's just a connection glitch or mock link
+                            r = requests.head(link, timeout=3, allow_redirects=True)
                         except requests.RequestException:
                             pass # For now, we skip blocking on connectivity issues to avoid UX friction
 
@@ -774,7 +863,11 @@ class SwapRequestListView(APIView):
                 return Response({"detail": "Slot not found."}, status=status.HTTP_404_NOT_FOUND)
                 
         # Requested to return data from NewsletterSlot table instead of SwapRequest
-        slots = NewsletterSlot.objects.all().order_by('-created_at')
+        # Filter for public slots from other users
+        slots = NewsletterSlot.objects.filter(
+            visibility='public',
+            status='available'
+        ).exclude(user=request.user).order_by('-created_at')
         serializer = SlotExploreSerializer(slots, many=True)
         return Response(serializer.data)
 
@@ -1026,8 +1119,8 @@ class SwapManagementListView(APIView):
         'pending': ['pending'],
         'sending': ['sending'],
         'rejected': ['rejected'],
-        'scheduled': ['scheduled', 'completed', 'confirmed'],
-        'completed': ['verified'],
+        'scheduled': ['scheduled'],
+        'completed': ['completed', 'verified'],
     }
 
     def get(self, request):
@@ -1058,31 +1151,6 @@ class SwapManagementListView(APIView):
             'requester', 'slot', 'book'
         ).order_by('-created_at')
 
-        # Status filtering (takes priority over tab filtering)
-        if status_filter:
-            if tab == 'pending':
-                qs = qs.filter(slot__user=user, status='pending')
-            elif tab == 'sending':
-                qs = qs.filter(requester=user, status='pending')
-            elif tab == 'rejected':
-                qs = qs.filter(status='rejected')
-            elif tab == 'scheduled':
-                qs = qs.filter(status='scheduled')
-            elif tab == 'completed':
-                qs = qs.filter(status__in=['completed', 'verified'])
-        else:
-            # Tab filtering (only if no explicit status filter)
-            if tab == 'pending':
-                qs = qs.filter(slot__user=user, status='pending')
-            elif tab == 'sending':
-                qs = qs.filter(requester=user, status='pending')
-            elif tab == 'rejected':
-                qs = qs.filter(status='rejected')
-            elif tab == 'scheduled':
-                qs = qs.filter(status='scheduled')
-            elif tab == 'completed':
-                qs = qs.filter(status__in=['completed', 'verified'])
-
         # Search by author name, book title, or date
         if search:
             qs = qs.filter(
@@ -1092,35 +1160,62 @@ class SwapManagementListView(APIView):
                 Q(slot__send_date__icontains=search)
             ).distinct()
 
-        # Removed blocking sync_profile_audience loop to prevent API cancellation/timeout.
-        # This should be handled by a background task or a separate endpoint.
-
+        # We must serialize all results to determine their "effective status"
+        # as the serializer has complex logic (dates, payments) that can't be easily
+        # matched in a single DB query for tab counts and results categorization.
         serializer = SwapManagementSerializer(qs, many=True, context={'request': request})
+        all_serialized_data = serializer.data
 
-        # Tab counts for the badge numbers on each tab
-        all_qs = SwapRequest.objects.filter(Q(slot__user=user) | Q(requester=user))
-        
-        # If status filter is provided, use it for counts
+        # Initialize tab counts
+        tab_counts = {
+            'all': len(all_serialized_data),
+            'pending': 0,
+            'sending': 0,
+            'rejected': 0,
+            'scheduled': 0,
+            'completed': 0,
+        }
+
+        # Categorize results and calculate counts
+        final_results = []
+        for item in all_serialized_data:
+            item_status = item.get('status')
+            
+            # Increment counts based on effective status
+            if item_status == 'pending':
+                tab_counts['pending'] += 1
+            elif item_status == 'sending':
+                tab_counts['sending'] += 1
+            elif item_status == 'rejected':
+                tab_counts['rejected'] += 1
+            elif item_status == 'scheduled':
+                tab_counts['scheduled'] += 1
+            elif item_status in ['completed', 'verified']:
+                tab_counts['completed'] += 1
+
+
+            # Filter results for the current tab
+            # 'sending' result matches 'sending' tab, 'pending' result matches 'pending' tab
+            if tab == 'all':
+                final_results.append(item)
+            elif tab == item_status:
+                final_results.append(item)
+            elif tab == 'completed' and item_status == 'verified':
+                final_results.append(item)
+
+        # Apply explicit status_filter if provided
         if status_filter:
+            final_results = [r for r in all_serialized_data if r.get('status') == status_filter]
             tab_counts = {
-                'all': all_qs.count(),
-                'filtered': all_qs.filter(status=status_filter).count(),
-            }
-        else:
-            tab_counts = {
-                'all': all_qs.count(),
-                'pending': all_qs.filter(slot__user=user, status='pending').count(),
-                'sending': all_qs.filter(requester=user, status='pending').count(),
-                'rejected': all_qs.filter(status='rejected').count(),
-                'scheduled': all_qs.filter(status='scheduled').count(),
-                'completed': all_qs.filter(status__in=['completed', 'verified']).count(),
+                'all': len(all_serialized_data),
+                'filtered': len(final_results)
             }
 
         return Response({
             'tab': tab,
             'status_filter': status_filter if status_filter else None,
             'tab_counts': tab_counts,
-            'results': serializer.data,
+            'results': final_results,
         })
 
 
@@ -1145,10 +1240,34 @@ class AcceptSwapView(APIView):
         slot = swap.slot
         is_free_slot = slot.promotion_type == 'free' or (slot.price is None or slot.price == 0)
         
-        # Update status: if free, mark as completed; otherwise scheduled
+        # Check if payment is already completed for paid slots
+        payment_completed = False
+        if not is_free_slot:
+            try:
+                payment = SwapPayment.objects.get(swap_request=swap)
+                payment_completed = payment.status == 'completed'
+            except SwapPayment.DoesNotExist:
+                payment_completed = False
+        
+        # Update status logic:
+        # - Free slot: mark as completed immediately (no payment needed)
+        # - Paid slot: always mark as scheduled (regardless of payment status)
+        #   Swap becomes completed only when BOTH authors have paid/newsletter sent
+        
+        # Always populate the scheduled date from the slot
+        swap.scheduled_date = slot.send_date
+        
         if is_free_slot:
             swap.status = 'completed'
+            swap.completed_at = timezone.now()
+            
+            # AWARD TIMELINESS POINTS - free slot completed immediately
+            from core.services.reputation_service import ReputationService
+            ReputationService.update_timeliness(swap.slot.user, is_ontime=True)
+            ReputationService.update_timeliness(swap.requester, is_ontime=True)
         else:
+            # Paid slot - always scheduled after acceptance
+            # Payment completion doesn't change this to completed in DB
             swap.status = 'scheduled'
         swap.save()
 
@@ -1367,6 +1486,10 @@ class TrackMySwapView(APIView):
     GET /api/track-swap/<id>/
     Returns data for the 'Track My Swap' modal (Figma).
     Shows: partner info, promoting book, countdown, deadline, links.
+    
+    POST /api/track-swap/<id>/
+    Mark swap as completed when newsletter is sent. Awards timeliness points.
+    Body: { "tracking_number": "optional_campaign_id" }
     """
     permission_classes = [IsAuthenticated]
 
@@ -1400,7 +1523,16 @@ class TrackMySwapView(APIView):
         from core.models import SwapLinkClick
         if not swap.link_clicks.exists() and swap.book:
             # Create default tracking link for the swap
-            destination_url = getattr(swap.book, 'amazon_url', None) or getattr(swap.book, 'website_url', None) or "#"
+            # Priority: 1. swap.site_url (custom URL for this swap), 2. book.site_url (comma-separated URLs), 3. "#"
+            destination_url = "#"
+            if swap.site_url:
+                destination_url = swap.site_url
+            elif swap.book.site_url:
+                # site_url is comma-separated, take the first one
+                urls = [u.strip() for u in swap.book.site_url.split(',') if u.strip()]
+                if urls:
+                    destination_url = urls[0]
+            
             SwapLinkClick.objects.get_or_create(
                 swap=swap,
                 link_name=f"Swap Promo - {swap.book.title}",
@@ -1411,6 +1543,56 @@ class TrackMySwapView(APIView):
             serializer = TrackMySwapSerializer(swap, context={'request': request})
         
         return Response(serializer.data)
+
+    def post(self, request, pk):
+        """
+        Mark swap as completed when user sends their newsletter.
+        Awards timeliness points to both parties.
+        """
+        from core.services.reputation_service import ReputationService
+        from django.utils import timezone
+
+        try:
+            swap = SwapRequest.objects.select_related(
+                'requester', 'slot', 'book'
+            ).get(
+                Q(slot__user=request.user) | Q(requester=request.user),
+                pk=pk,
+            )
+        except SwapRequest.DoesNotExist:
+            return Response({"detail": "Swap not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        # Only allow marking as completed if in scheduled/confirmed/sending status
+        if swap.status not in ['scheduled', 'confirmed', 'sending']:
+            return Response(
+                {"detail": f"Cannot mark swap as completed from '{swap.status}' status."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Get optional tracking number from request
+        tracking_number = request.data.get('tracking_number', '')
+
+        # Mark swap as completed
+        swap.status = 'completed'
+        swap.completed_at = timezone.now()
+        swap.shipped_at = timezone.now()
+        if tracking_number:
+            swap.tracking_number = tracking_number
+        swap.save()
+
+        # Award timeliness points to both parties
+        ReputationService.update_timeliness(swap.slot.user, is_ontime=True)
+        ReputationService.update_timeliness(swap.requester, is_ontime=True)
+
+        # Also award confirmed sends
+        ReputationService.update_confirmed_sends(swap.slot.user)
+        ReputationService.update_confirmed_sends(swap.requester)
+
+        return Response({
+            "detail": "Swap marked as completed. Timeliness points awarded!",
+            "status": "completed",
+            "completed_at": swap.completed_at.isoformat()
+        })
 
 
 class CancelSwapView(APIView):
@@ -1793,8 +1975,15 @@ class SubscriberAnalyticsView(APIView):
                     if swap.requester.profiles.first():
                         partner_name = swap.requester.profiles.first().name
                     
-                    # Get book URL and add tracking parameter
-                    book_url = getattr(swap.book, 'amazon_url', '#') or "#"
+                    # Get book URL with proper priority: 1. swap.site_url, 2. book.site_url, 3. "#"
+                    book_url = "#"
+                    if swap.site_url:
+                        book_url = swap.site_url
+                    elif swap.book.site_url:
+                        urls = [u.strip() for u in swap.book.site_url.split(',') if u.strip()]
+                        if urls:
+                            book_url = urls[0]
+                    
                     if '?' in book_url and book_url != '#':
                         tracked_url = f"{book_url}&swap_track={swap.id}"
                     else:
@@ -2191,13 +2380,15 @@ class AuthorDashboardView(APIView):
         recent_activities = recent_activities[:6]
 
         # ─── 4. CAMPAIGN ANALYTICS ───────────────────────────────────
-        campaigns = CampaignAnalytic.objects.filter(user=user).order_by('-date')
+        all_campaigns = CampaignAnalytic.objects.filter(user=user).order_by('-date')
+        
+        # Filter only sent campaigns (date < today) for average calculations
+        sent_campaigns = all_campaigns.filter(date__lt=today)
 
         # Calculate averages for the analytics cards
-        total_campaigns = campaigns.count()
-        if total_campaigns > 0:
+        if sent_campaigns.exists():
             from django.db.models import Avg
-            avg_stats = campaigns.aggregate(
+            avg_stats = sent_campaigns.aggregate(
                 avg_open_rate=Avg('open_rate'),
                 avg_click_rate=Avg('click_rate'),
             )
@@ -2211,8 +2402,8 @@ class AuthorDashboardView(APIView):
         thirty_days_ago = today - timedelta(days=30)
         sixty_days_ago = today - timedelta(days=60)
 
-        current_period = campaigns.filter(date__gte=thirty_days_ago)
-        previous_period = campaigns.filter(date__gte=sixty_days_ago, date__lt=thirty_days_ago)
+        current_period = all_campaigns.filter(date__gte=thirty_days_ago, date__lt=today)
+        previous_period = all_campaigns.filter(date__gte=sixty_days_ago, date__lt=thirty_days_ago)
 
         current_avg_open = 0.0
         current_avg_click = 0.0
@@ -2252,7 +2443,7 @@ class AuthorDashboardView(APIView):
             "open_rate_change": open_rate_change,
             "click_rate_change": click_rate_change,
             "improvement_label": f"+{open_rate_change}% improvement" if open_rate_change > 0 else f"{open_rate_change}% change",
-            "recent_campaigns": CampaignAnalyticSerializer(campaigns[:5], many=True).data,
+            "recent_campaigns": CampaignAnalyticSerializer(all_campaigns[:5], many=True).data,
         }
 
         # ─── 5. QUICK ACTIONS ────────────────────────────────────────
@@ -4167,25 +4358,18 @@ class ConfirmSwapPaymentView(APIView):
         # Get the payment record
         payment = getattr(swap_request, 'payment', None)
         if not payment:
-            # If no payment record exists, but the receiver is manually confirming, 
-            # we create a 'placeholder' completed payment so the swap can finish.
-            from core.models import SwapPayment
-            from django.utils import timezone
-            payment = SwapPayment.objects.create(
-                swap_request=swap_request,
-                payer=swap_request.requester,
-                amount=swap_request.slot.price or 0,
-                status='completed',
-                paid_at=timezone.now(),
-                stripe_checkout_session_id="manual_confirmation"
+            # No payment record exists - cannot confirm
+            return Response(
+                {'detail': 'No payment record found. Payment must be completed through Stripe first.'},
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Check if payment is completed (if it existed but was pending)
+        # Check if payment is completed through Stripe
         if payment.status != 'completed':
-            from django.utils import timezone
-            payment.status = 'completed'
-            payment.paid_at = timezone.now()
-            payment.save(update_fields=['status', 'paid_at'])
+            return Response(
+                {'detail': 'Payment has not been completed yet. Please complete payment first.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         # Check if already confirmed
         if payment.receiver_confirmed:
@@ -5419,10 +5603,9 @@ class WalletTransactionHistoryView(APIView):
                     transaction.status = 'cancelled'
                     transaction.save()
         
-        # Get all transactions involving this user using Q objects for efficiency and SQLite compatibility
-        # Filter to show only wallet-related transactions (bonus/add_funds, withdrawal)
+        # Filter for all transactions involving this user that represent monetary movement
         from django.db.models import Q
-        wallet_transaction_types = ['bonus', 'withdrawal', 'add_funds']
+        wallet_transaction_types = ['bonus', 'withdrawal', 'add_funds', 'direct_payment', 'swap_payment', 'refund']
         all_transactions = PaymentTransaction.objects.filter(
             Q(sender=user) | Q(receiver=user),
             transaction_type__in=wallet_transaction_types
@@ -5438,7 +5621,6 @@ class WalletTransactionHistoryView(APIView):
             all_transactions = all_transactions.filter(status=status_filter)
         
         # By default, exclude cancelled and pending wallet funding transactions unless explicitly requested
-        # Also exclude pending direct_payment transactions with checkout session IDs (user hasn't paid yet)
         if not status_filter:
             all_transactions = all_transactions.exclude(
                 Q(status='cancelled') | 
@@ -5446,6 +5628,15 @@ class WalletTransactionHistoryView(APIView):
                 Q(transaction_type='direct_payment', status='pending', stripe_payment_intent_id__startswith='cs_')
             )
         
+        # DRF Pagination
+        from .ui_views import StandardResultsSetPagination
+        paginator = StandardResultsSetPagination()
+        page = paginator.paginate_queryset(all_transactions, request)
+        
+        if page is not None:
+            serializer = PaymentTransactionSerializer(page, many=True, context={'request': request})
+            return paginator.get_paginated_response(serializer.data)
+
         serializer = PaymentTransactionSerializer(all_transactions, many=True, context={'request': request})
         return Response(serializer.data)
 
@@ -5566,10 +5757,24 @@ class DirectPaymentView(APIView):
         
         # Check sender's wallet balance
         sender_wallet, created = UserWallet.objects.get_or_create(user=sender)
-        payment_method = request.data.get('payment_method', 'wallet')
-
-        # Scenario A: User has enough balance in their internal wallet AND didn't force stripe
-        if sender_wallet.balance >= amount and payment_method != 'stripe':
+        payment_method = request.data.get('payment_method', 'wallet')  # 'wallet' or 'card'
+        
+        # Validate payment_method
+        if payment_method not in ['wallet', 'card']:
+            return Response({
+                'detail': 'Invalid payment_method. Use "wallet" or "card".'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # If user explicitly chose wallet, check balance first
+        if payment_method == 'wallet':
+            if sender_wallet.balance < amount:
+                return Response({
+                    'detail': 'Insufficient wallet balance.',
+                    'current_balance': str(sender_wallet.balance),
+                    'required_amount': str(amount),
+                    'available_payment_methods': ['card']  # Suggest card as alternative
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
             # Create transaction
             transaction = PaymentTransaction.objects.create(
                 sender=sender,
@@ -5598,14 +5803,14 @@ class DirectPaymentView(APIView):
                 return Response({
                     'detail': f'Wallet payment failed: {str(e)}'
                 }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-        # Scenario B: Wallet balance is low, try Stripe if configured
+        
+        # User chose card payment - use Stripe
         if not settings.STRIPE_SECRET_KEY:
             return Response({
-                'detail': 'Insufficient balance and Stripe is not configured.',
+                'detail': 'Card payment is not configured. Please use wallet payment.',
                 'current_balance': str(sender_wallet.balance)
             }, status=status.HTTP_400_BAD_REQUEST)
-
+        
         stripe.api_key = settings.STRIPE_SECRET_KEY.strip()
         
         try:

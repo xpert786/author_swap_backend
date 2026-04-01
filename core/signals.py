@@ -16,6 +16,7 @@ def _sync_userprofile_to_core(user_profile, core_profile):
 
     if user_profile.pen_name and user_profile.pen_name != core_profile.name:
         core_profile.name = user_profile.pen_name
+        core_profile.pen_name = user_profile.pen_name
         changed = True
     if user_profile.author_bio and user_profile.author_bio != core_profile.bio:
         core_profile.bio = user_profile.author_bio

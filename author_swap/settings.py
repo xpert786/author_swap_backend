@@ -27,7 +27,11 @@ SECRET_KEY = 'django-insecure-mkk=_!s*d5-2@@utlv6+t5m*rzfp16y&m1n%l$03vq8&po==k4
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ["*"]
+ALLOWED_HOSTS = [
+    "72.61.251.114",
+    "authorswap.com",
+    "www.authorswap.com"
+]
 
 
 # Application definition
