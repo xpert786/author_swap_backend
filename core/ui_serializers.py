@@ -111,28 +111,25 @@ class SlotPartnerSerializer(serializers.ModelSerializer):
         return obj.book.title if obj.book else None
 
     def get_partner_sends_date(self, obj):
-        """Get partner's (requester's) upcoming slot send date"""
+        """Get partner's (requester's) slot send date"""
         if obj.offered_slot:
             return obj.offered_slot.send_date
-        # Fallback: get partner's next upcoming slot
+        # Fallback: get partner's most recent or upcoming slot
         from core.models import NewsletterSlot
+        # Try to get any slot from partner (upcoming first, then any)
         partner_slot = NewsletterSlot.objects.filter(
-            user=obj.requester,
-            send_date__gte=timezone.now().date(),
-            status__in=['available', 'booked']
+            user=obj.requester
         ).order_by('send_date').first()
         return partner_slot.send_date if partner_slot else None
 
     def get_partner_sends_time(self, obj):
-        """Get partner's (requester's) upcoming slot send time"""
+        """Get partner's (requester's) slot send time"""
         if obj.offered_slot:
             return obj.offered_slot.send_time
-        # Fallback: get partner's next upcoming slot
+        # Fallback: get partner's most recent or upcoming slot
         from core.models import NewsletterSlot
         partner_slot = NewsletterSlot.objects.filter(
-            user=obj.requester,
-            send_date__gte=timezone.now().date(),
-            status__in=['available', 'booked']
+            user=obj.requester
         ).order_by('send_date').first()
         return partner_slot.send_time if partner_slot else None
 
@@ -140,15 +137,13 @@ class SlotPartnerSerializer(serializers.ModelSerializer):
         return obj.requested_book.title if obj.requested_book else None
 
     def _get_partner_slot(self, obj):
-        """Helper method to get partner's slot (either offered_slot or their next upcoming slot)"""
+        """Helper method to get partner's slot (either offered_slot or their next slot)"""
         if obj.offered_slot:
             return obj.offered_slot
-        # Fallback: get partner's next upcoming slot
+        # Fallback: get partner's slot (any status, any date)
         from core.models import NewsletterSlot
         return NewsletterSlot.objects.filter(
-            user=obj.requester,
-            send_date__gte=timezone.now().date(),
-            status__in=['available', 'booked']
+            user=obj.requester
         ).order_by('send_date').first()
 
     def get_partner_audience_size(self, obj):
