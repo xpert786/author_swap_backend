@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from django.utils import timezone
 from .models import NewsletterSlot, SwapRequest, Book, Profile
 
 class AuthorProfileSerializer(serializers.ModelSerializer):
