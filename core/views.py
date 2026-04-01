@@ -1259,6 +1259,11 @@ class AcceptSwapView(APIView):
         if is_free_slot:
             swap.status = 'completed'
             swap.completed_at = timezone.now()
+            
+            # AWARD TIMELINESS POINTS - free slot completed immediately
+            from core.services.reputation_service import ReputationService
+            ReputationService.update_timeliness(swap.slot.user, is_ontime=True)
+            ReputationService.update_timeliness(swap.requester, is_ontime=True)
         else:
             # Paid slot - always scheduled after acceptance
             # Payment completion doesn't change this to completed in DB
@@ -1480,6 +1485,10 @@ class TrackMySwapView(APIView):
     GET /api/track-swap/<id>/
     Returns data for the 'Track My Swap' modal (Figma).
     Shows: partner info, promoting book, countdown, deadline, links.
+    
+    POST /api/track-swap/<id>/
+    Mark swap as completed when newsletter is sent. Awards timeliness points.
+    Body: { "tracking_number": "optional_campaign_id" }
     """
     permission_classes = [IsAuthenticated]
 
@@ -1533,6 +1542,56 @@ class TrackMySwapView(APIView):
             serializer = TrackMySwapSerializer(swap, context={'request': request})
         
         return Response(serializer.data)
+
+    def post(self, request, pk):
+        """
+        Mark swap as completed when user sends their newsletter.
+        Awards timeliness points to both parties.
+        """
+        from core.services.reputation_service import ReputationService
+        from django.utils import timezone
+
+        try:
+            swap = SwapRequest.objects.select_related(
+                'requester', 'slot', 'book'
+            ).get(
+                Q(slot__user=request.user) | Q(requester=request.user),
+                pk=pk,
+            )
+        except SwapRequest.DoesNotExist:
+            return Response({"detail": "Swap not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        # Only allow marking as completed if in scheduled/confirmed/sending status
+        if swap.status not in ['scheduled', 'confirmed', 'sending']:
+            return Response(
+                {"detail": f"Cannot mark swap as completed from '{swap.status}' status."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Get optional tracking number from request
+        tracking_number = request.data.get('tracking_number', '')
+
+        # Mark swap as completed
+        swap.status = 'completed'
+        swap.completed_at = timezone.now()
+        swap.shipped_at = timezone.now()
+        if tracking_number:
+            swap.tracking_number = tracking_number
+        swap.save()
+
+        # Award timeliness points to both parties
+        ReputationService.update_timeliness(swap.slot.user, is_ontime=True)
+        ReputationService.update_timeliness(swap.requester, is_ontime=True)
+
+        # Also award confirmed sends
+        ReputationService.update_confirmed_sends(swap.slot.user)
+        ReputationService.update_confirmed_sends(swap.requester)
+
+        return Response({
+            "detail": "Swap marked as completed. Timeliness points awarded!",
+            "status": "completed",
+            "completed_at": swap.completed_at.isoformat()
+        })
 
 
 class CancelSwapView(APIView):
