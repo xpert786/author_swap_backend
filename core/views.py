@@ -1193,7 +1193,6 @@ class SwapManagementListView(APIView):
             elif item_status in ['completed', 'verified']:
                 tab_counts['completed'] += 1
 
-
             # Filter results for the current tab
             # 'sending' result matches 'sending' tab, 'pending' result matches 'pending' tab
             if tab == 'all':
