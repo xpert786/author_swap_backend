@@ -36,13 +36,12 @@ class ProfileSerializer(serializers.ModelSerializer):
         from django.utils import timezone
         today = timezone.now().date()
         
-        # Get public and available slots from today onwards
+        # Get all public slots from today onwards to show full context in calendar
         slots = NewsletterSlot.objects.filter(
             user=obj.user,
-            status='available',
             visibility='public',
             send_date__gte=today
-        ).order_by('send_date')
+        ).exclude(status__in=['draft', 'deleted', 'completed']).order_by('send_date')
         
         # Re-use the serializer for nested output
         return NewsletterSlotSerializer(slots, many=True, context=self.context).data
